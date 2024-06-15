@@ -31,6 +31,9 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
+    ],
+    "externalBin": [
+      "binaries/extract-pdf-pages"
     ]
   },
   "$schema": "../node_modules/@tauri-apps/cli/schema.json"

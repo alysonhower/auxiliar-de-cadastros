@@ -1,9 +1,7 @@
 <script lang="ts">
   import * as pdfjs from 'pdfjs-dist';
-  import { homeDir } from '@tauri-apps/api/path';
-  import { readFile } from '@tauri-apps/plugin-fs';
-  import { open } from '@tauri-apps/plugin-dialog';
-  import { tick, untrack } from 'svelte';
+
+  import { untrack } from 'svelte';
 
   import { Button, buttonVariants } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
@@ -21,6 +19,11 @@
   import FilePlus from 'lucide-svelte/icons/file-plus';
   import FileMinus from 'lucide-svelte/icons/file-minus';
   import FileCheck from 'lucide-svelte/icons/file-check';
+
+  import { homeDir } from '@tauri-apps/api/path';
+  import { readFile, exists } from '@tauri-apps/plugin-fs';
+  import { open } from '@tauri-apps/plugin-dialog';
+  import { Command } from '@tauri-apps/plugin-shell';
 
   import type {
     PDFDocumentProxy,
@@ -42,34 +45,45 @@
   let component: HTMLDivElement;
   let canvasContainer: HTMLDivElement;
   let renderCanvas: HTMLCanvasElement;
-  let selectedCanvas: HTMLCanvasElement;
-  let processingCanvas: HTMLCanvasElement;
-  let textLayerSvg: SVGSVGElement;
+  let statusCanvas: HTMLCanvasElement;
+  let textLayer: SVGSVGElement;
 
   let setup = $state({
     path: undefined as string | undefined,
-    scale: undefined as number | undefined,
-    rotation: 0,
-    numPages: undefined as number | undefined,
-    pageNumber: 1,
-    pageRendering: false as boolean,
-    pageNumPending: undefined as number | undefined,
+    dataPath: undefined as string | undefined,
     document: undefined as PDFDocumentProxy | undefined,
     page: undefined as PDFPageProxy | undefined,
+    scale: 1,
+    rotation: 0,
+    numPages: 0,
+    pageNumber: 1,
+    pageRendering: false,
+    pageNumPending: undefined as number | undefined,
+    metadata: undefined as undefined | any,
     isActive: false,
     confirmProcessDialogOpen: false,
   });
 
   const loadDocument = async () => {
-    const data = await readFile(setup.path!);
-    return await pdfjs.getDocument({ data }).promise;
+    try {
+      const data = await readFile(setup.path!);
+      const document = await pdfjs.getDocument({ data }).promise;
+      setup.document = document;
+      setup.numPages = document.numPages;
+      document.getMetadata().then((metadata) => {
+        setup.metadata = metadata;
+        console.log('Document loaded!\nMetadata:\n', metadata);
+      });
+    } catch (error) {
+      console.error('Error loading document:', error);
+    }
   };
 
   const buildTextLayer = (
     viewport: pdfjs.PageViewport,
     textContent: TextContent,
   ) => {
-    const svg = textLayerSvg;
+    const svg = textLayer;
     svg.innerHTML = '';
     svg.setAttribute('width', `${viewport.width}px`);
     svg.setAttribute('height', `${viewport.height}px`);
@@ -95,57 +109,63 @@
     });
   };
 
+  const applyStatusCanvasStyles = (
+    pageNumber: number,
+    canvasContext: CanvasRenderingContext2D,
+    viewportWidth: number,
+    viewportHeight: number,
+  ) => {
+    const fontSize = Math.min(viewportWidth, viewportHeight) * 0.05;
+    if (processingPages.includes(pageNumber)) {
+      canvasContext.clearRect(0, 0, viewportWidth, viewportHeight);
+      const text = `Página ${pageNumber} em processamento...`;
+      canvasContext.font = `bold ${fontSize}px Arial`;
+      const textWidth = canvasContext.measureText(text).width;
+      const x = (viewportWidth - textWidth) / 2;
+      const y = (viewportHeight + fontSize) / 2 - fontSize / 2;
+      canvasContext.fillStyle = 'rgba(186, 79, 125, 0.7)';
+      canvasContext.fillRect(0, 0, viewportWidth, viewportHeight);
+      canvasContext.fillStyle = 'rgba(232, 227, 229, 1)';
+      canvasContext.fillText(text, x, y);
+    } else if (selectedPages.includes(pageNumber)) {
+      canvasContext.clearRect(0, 0, viewportWidth, viewportHeight);
+      const text = `Página ${pageNumber} selecionada`;
+      canvasContext.font = `bold ${fontSize}px Arial`;
+      const textWidth = canvasContext.measureText(text).width;
+      const x = (viewportWidth - textWidth) / 2;
+      const y = (viewportHeight + fontSize) / 2 - fontSize / 2;
+      canvasContext.fillStyle = 'rgba(232, 227, 229, 0.7)';
+      canvasContext.fillRect(0, 0, viewportWidth, viewportHeight);
+      canvasContext.fillStyle = 'rgba(186, 79, 125, 1)';
+      canvasContext.fillText(text, x, y);
+    } else {
+      canvasContext.clearRect(0, 0, viewportWidth, viewportHeight);
+    }
+  };
+
   const loadPage = async (pageNumber: number) => {
     setup.pageRendering = true;
 
     const page = await setup.document!.getPage(pageNumber);
     const textContent = await page.getTextContent();
 
-    if (!setup.scale) {
-      setup.scale = component.clientWidth / component.clientHeight;
-      console.log('scale: ', setup.scale);
-    }
-
     const viewport = page.getViewport({
       scale: setup.scale,
       rotation: setup.rotation,
     });
 
-    const { height: height, width: width } = viewport;
+    const { height, width } = viewport;
+
     renderCanvas.height = height;
     renderCanvas.width = width;
-    selectedCanvas.height = height;
-    selectedCanvas.width = width;
-    processingCanvas.height = height;
-    processingCanvas.width = width;
+    statusCanvas.height = height;
+    statusCanvas.width = width;
 
     const canvasContext = renderCanvas.getContext('2d');
-    const selectedCanvasContext = selectedCanvas.getContext('2d');
-    const processingCanvasContext = processingCanvas.getContext('2d');
+    const statusCanvasContext = statusCanvas.getContext('2d');
 
-    if (canvasContext && selectedCanvasContext && processingCanvasContext) {
-      const fontSize = Math.min(width, height) * 0.05;
-      const text = `Página ${pageNumber} selecionada`;
-      const text2 = `Página ${pageNumber} em processamento...`;
-      selectedCanvasContext.font = `bold ${fontSize}px Arial`;
-      processingCanvasContext.font = `bold ${fontSize}px Arial`;
-      const textWidth = selectedCanvasContext.measureText(text).width;
-      const textWidth2 = processingCanvasContext.measureText(text2).width;
-
-      const x = (width - textWidth) / 2;
-      const y = (height + fontSize) / 2 - fontSize / 2;
-      const x2 = (width - textWidth2) / 2;
-      const y2 = (height + fontSize) / 2 - fontSize / 2;
-
-      selectedCanvasContext.fillStyle = 'rgba(232, 227, 229, 0.7)';
-      selectedCanvasContext.fillRect(0, 0, width, height);
-      selectedCanvasContext.fillStyle = 'rgba(186, 79, 125, 1)';
-      selectedCanvasContext.fillText(text, x, y);
-
-      processingCanvasContext.fillStyle = 'rgba(186, 79, 125, 0.7)';
-      processingCanvasContext.fillRect(0, 0, width, height);
-      processingCanvasContext.fillStyle = 'rgba(232, 227, 229, 1)';
-      processingCanvasContext.fillText(text2, x2, y2);
+    if (canvasContext && statusCanvasContext) {
+      applyStatusCanvasStyles(pageNumber, statusCanvasContext, width, height);
 
       const renderContext = {
         canvasContext,
@@ -183,29 +203,23 @@
 
   const updateScale = (delta: number) => {
     const scaleFactor = Math.exp(delta);
-    setup.scale = Math.max(0.4, Math.min(10, setup.scale! * scaleFactor));
+    setup.scale = Math.min(10, Math.max(0.4, setup.scale! * scaleFactor));
   };
 
   const updateRotation = (delta: number) => {
-    setup.rotation = (((setup.rotation + delta) % 360) + 360) % 360;
+    setup.rotation = (setup.rotation + delta + 360) % 360;
   };
 
-  const onFirstPage = () => (setup.pageNumber = 1);
-  const onLastPage = () => (setup.pageNumber = setup.numPages!);
-  const onPrevPage = () => updatePageNumber(-1);
-  const onNextPage = () => updatePageNumber(1);
-  const onZoomIn = () => updateScale(0.4);
-  const onZoomOut = () => updateScale(-0.4);
-  const onRotateLeft = () => updateRotation(-90);
-  const onRotateRight = () => updateRotation(90);
-  const onWheel = (e: WheelEvent) => {
-    if (e.ctrlKey) {
-      e.deltaY < 0 ? updateScale(0.1) : updateScale(-0.1);
-    } else if (e.shiftKey) {
-      e.deltaY < 0 ? updateRotation(90) : updateRotation(-90);
-    }
-  };
-  const onSelectPDF = async () => {
+  const handleFirstPage = () => (setup.pageNumber = 1);
+  const handleLastPage = () => (setup.pageNumber = setup.numPages!);
+  const handlePrevPage = () => updatePageNumber(-1);
+  const handleNextPage = () => updatePageNumber(1);
+  const handleZoomIn = () => updateScale(0.4);
+  const handleZoomOut = () => updateScale(-0.4);
+  const handleRotateLeft = () => updateRotation(-90);
+  const handleRotateRight = () => updateRotation(90);
+
+  const handleSelectPDF = async () => {
     const file = await open({
       multiple: false,
       directory: false,
@@ -213,31 +227,30 @@
       title: 'Por favor, selecione um PDF',
       defaultPath: await homeDir(),
     });
-    if (!file) return;
-    setup.path = file.path;
+    if (file) setup.path = file.path;
   };
 
-  const onSelectPage = (pageNumber: number) => {
-    if (processingPages.includes(pageNumber)) return;
+  const handleSelectPage = () => {
+    if (processingPages.includes(validPageNumber)) return;
+    const pageNumber = validPageNumber;
     const index = selectedPages.indexOf(pageNumber);
     if (index !== -1) {
       selectedPages.splice(index, 1);
+    } else {
+      selectedPages.push(pageNumber);
+    }
+    selectedPages.sort((a, b) => a - b);
+    const currentIndex = selectedPages.indexOf(pageNumber);
+    if (currentIndex === -1) {
       const prevSelectedPage = selectedPages
         .slice()
         .reverse()
         .find((page) => page < pageNumber && !processingPages.includes(page));
-      if (prevSelectedPage) {
-        setup.pageNumber = prevSelectedPage;
-      } else {
-        const nextSelectedPage = selectedPages.find(
-          (page) => page > pageNumber && !processingPages.includes(page),
-        );
-        if (nextSelectedPage) {
-          setup.pageNumber = nextSelectedPage;
-        }
-      }
+      const nextSelectedPage = selectedPages.find(
+        (page) => page > pageNumber && !processingPages.includes(page),
+      );
+      setup.pageNumber = prevSelectedPage || nextSelectedPage || pageNumber;
     } else {
-      selectedPages.push(pageNumber);
       const prevUnselectedPage = Array.from(
         { length: setup.numPages! },
         (_, i) => i + 1,
@@ -250,145 +263,203 @@
             !selectedPages.includes(page) &&
             !processingPages.includes(page),
         );
-      if (prevUnselectedPage) {
-        setup.pageNumber = prevUnselectedPage;
-      } else {
-        const nextUnselectedPage = Array.from(
-          { length: setup.numPages! },
-          (_, i) => i + 1,
-        ).find(
-          (page) =>
-            page > pageNumber &&
-            !selectedPages.includes(page) &&
-            !processingPages.includes(page),
-        );
-        if (nextUnselectedPage) {
-          setup.pageNumber = nextUnselectedPage;
-        }
+      const nextUnselectedPage = Array.from(
+        { length: setup.numPages! },
+        (_, i) => i + 1,
+      ).find(
+        (page) =>
+          page > pageNumber &&
+          !selectedPages.includes(page) &&
+          !processingPages.includes(page),
+      );
+      setup.pageNumber = prevUnselectedPage || nextUnselectedPage || pageNumber;
+    }
+    console.log(
+      selectedPages.length > 0
+        ? selectedPagesText
+        : 'Nenhuma página selecionada.',
+    );
+  };
+
+  const handlePageNumberClick = (pageNumber: number) => {
+    setup.pageNumber === pageNumber
+      ? handleSelectPage()
+      : (setup.pageNumber = pageNumber);
+  };
+
+  const handleMouseDown = (e: MouseEvent) => {
+    if (e.detail > 1) e.preventDefault();
+    const target = e.target as Node;
+    setup.isActive =
+      component.contains(target) || canvasContainer.contains(target);
+  };
+
+  const handleDoubleClick = (e: MouseEvent) =>
+    setup.numPages &&
+    canvasContainer.contains(e.target as Node) &&
+    handleSelectPage();
+
+  const handleWheel = (e: WheelEvent) => {
+    if (!setup.numPages) return;
+
+    setup.isActive = component.contains(e.target as Node);
+
+    if (!setup.isActive) return;
+
+    if (e.ctrlKey && e.shiftKey) {
+      updateRotation(e.deltaY < 0 ? 90 : -90);
+    } else if (e.ctrlKey) {
+      updateScale(e.deltaY < 0 ? 0.1 : -0.1);
+    } else if (e.altKey) {
+      updatePageNumber(e.deltaY < 0 ? -1 : 1);
+    }
+  };
+
+  const handleKeyDown = (e: KeyboardEvent) => {
+    if (!setup.isActive) return;
+
+    e.key === 'Escape' && handleSelectPDF();
+
+    if (!setup.numPages) return;
+
+    switch (e.key) {
+      case 'Home':
+        handleFirstPage();
+        break;
+      case 'End':
+        handleLastPage();
+        break;
+      case 'ArrowLeft':
+        e.shiftKey ? handleFirstPage() : handlePrevPage();
+        break;
+      case 'ArrowRight':
+        e.shiftKey ? handleLastPage() : handleNextPage();
+        break;
+      case ' ':
+        e.preventDefault();
+        handleSelectPage();
+        break;
+      case 'Backspace':
+        if (selectedPages.length) setup.pageNumber = selectedPages.pop()!;
+        break;
+      case 'Enter':
+        if (selectedPages.length && !setup.confirmProcessDialogOpen)
+          setup.confirmProcessDialogOpen = true;
+        break;
+    }
+
+    if (e.ctrlKey) {
+      switch (e.key) {
+        case '=':
+          handleZoomIn();
+          break;
+        case '-':
+          handleZoomOut();
+          break;
+        case 'ArrowLeft':
+          handleRotateLeft();
+          break;
+        case 'ArrowRight':
+          handleRotateRight();
+          break;
       }
     }
-    selectedPages.sort((a, b) => a - b);
-    console.log('Páginas selecionadas: ' + selectedPages);
-  };
 
-  const onSelectPageRepresentation = (pageNumber: number) => {
-    if (setup.pageNumber === pageNumber) {
-      onSelectPage(pageNumber);
-    } else {
-      setup.pageNumber = pageNumber;
+    if (e.shiftKey) {
+      switch (e.key) {
+        case 'ArrowUp':
+          handleZoomIn();
+          break;
+        case 'ArrowDown':
+          handleZoomOut();
+          break;
+      }
     }
   };
 
-  $effect(() => {
-    console.log('pdfjs-dist version: ' + pdfjs.version);
-    if (!setup.path) return;
-    loadDocument()
-      .then((document) => {
-        untrack(() => {
-          selectedPages.splice(0, selectedPages.length);
-        });
-        setup.document = document;
-        setup.numPages = document.numPages;
-        setup.pageNumber = 1;
-        document.getMetadata().then((metadata) => {
-          console.log('Document loaded!\nMetadata:\n', metadata);
-        });
-      })
-      .catch((error) => console.error(error));
-    return () => setup.document?.destroy();
-  });
-
-  $effect(() => {
-    if (!setup.document) return;
-    setup.scale;
-    setup.rotation;
-    if (setup.pageNumber > 0 && setup.pageNumber <= setup.numPages!) {
-      tick().then(() => {
-        loadPageQueue(setup.pageNumber);
-        console.log('Page loaded!\nPage number: ' + setup.pageNumber);
-      });
+  const extractPages = async (path: string) => {
+    const sidecar_command = Command.sidecar('binaries/extract-pdf-pages', path);
+    const output = await sidecar_command.execute();
+    if (output.code !== 0) {
+      throw new Error(output.stderr);
     }
-  });
+    return output.stdout.trim();
+  };
 
-  const onProcessPages = () => {
+  const handleProcessPages = () => {
     processingPages.push(...selectedPages);
     selectedPages.splice(0, selectedPages.length);
     console.log('Páginas processadas: ' + processingPages);
   };
 
-  const dialogText = () => {
-    let output;
+  const selectedPagesText = $derived.by(() => {
     if (selectedPages.length === 1) {
-      output = `Página ${selectedPages[0]} selecionada`;
+      return `Página ${selectedPages[0]} selecionada.`;
     } else if (selectedPages.length === 2) {
-      output = `Páginas ${selectedPages[0]} e ${selectedPages[1]} selecionadas`;
+      return `Páginas ${selectedPages[0]} e ${selectedPages[1]} selecionadas.`;
     } else {
-      output = 'Páginas selecionadas: ';
-      for (let i = 0; i < selectedPages.length; i++) {
-        if (i === selectedPages.length - 1) {
-          output += `e ${selectedPages[i]}`;
-        } else {
-          output += `${selectedPages[i]}, `;
-        }
-      }
+      return `Páginas selecionadas: ${selectedPages.slice(0, -1).join(', ')} e ${selectedPages.slice(-1)}.`;
     }
-    return output + '.';
-  };
+  });
+
+  const validPageNumber = $derived(
+    Math.min(Math.max(1, setup.pageNumber), setup.numPages),
+  );
+
+  // Verify data path and extract pages if necessary
+  $effect(() => {
+    if (!setup.path) return;
+    const dataPath = setup.path.endsWith('.pdf')
+      ? setup.path.replace('.pdf', '-data')
+      : setup.path + '-data';
+    exists(dataPath)
+      .then((isExist) => {
+        if (isExist) {
+          console.log('Pages data already extracted at: ' + dataPath);
+        } else {
+          console.log('Pages data not found. Extracting data from pages...');
+          extractPages(setup.path!).then(() => {
+            console.log('Pages data extracted successfully at: ' + dataPath);
+          });
+        }
+      })
+      .then(() => (setup.dataPath = dataPath));
+  });
+
+  // Load document
+  $effect(() => {
+    if (!setup.path) return;
+    loadDocument();
+    return () => {
+      setup.document?.destroy().then(() => {
+        selectedPages.splice(0, selectedPages.length);
+        setup.metadata = undefined;
+        setup.numPages = 0;
+        setup.pageNumber = 1;
+        setup.scale = 1;
+        setup.rotation = 0;
+        setup.document = undefined;
+      });
+    };
+  });
+
+  // Load page
+  $effect(() => {
+    if (!setup.document || !validPageNumber) return;
+    setup.scale;
+    setup.rotation;
+    processingPages.length;
+    selectedPages.length;
+    untrack(() => loadPageQueue(validPageNumber));
+    console.log('Loading page...');
+  });
 </script>
 
 <svelte:window
-  onmousedown={(e) => {
-      if (e.detail > 1) {
-          e.preventDefault()
-        }
-      if (!component.contains(e.target as Node) && !canvasContainer.contains(e.target as Node)) {
-        setup.isActive = false
-      } else {
-        setup.isActive = true
-      }
-    }}
-  ondblclick={(e) => {
-      if (!setup.numPages || !canvasContainer.contains(e.target as Node)) return;
-      setup.numPages && onSelectPage(setup.pageNumber)
-    }}
-  onwheel={(e) => {
-      if (!setup.numPages) return
-      if (canvasContainer.contains(e.target as Node)) {
-        setup.isActive = true
-        onWheel(e);
-      } else if (component.contains(e.target as Node)) {
-        setup.isActive = true
-        if (e.deltaY < 0) {
-          onPrevPage();
-        } else {
-          onNextPage();
-        }
-      } else {
-        setup.isActive = false
-      }
-    }}
-  onkeydown={(e) => {
-    if (!setup.isActive) return;
-    e.key === 'Escape' && onSelectPDF();
-    if (!setup.numPages) return;
-    e.key === 'ArrowLeft' && onPrevPage();
-    e.key === 'ArrowRight' && onNextPage();
-    e.key === ' ' && (e.preventDefault(), onSelectPage(setup.pageNumber));
-    e.key === 'Home' && onFirstPage();
-    e.key === 'End' && onLastPage();
-    e.shiftKey && e.key === 'ArrowLeft' && onFirstPage();
-    e.shiftKey && e.key === 'ArrowRight' && onLastPage();
-    e.shiftKey && e.key === 'ArrowUp' && onZoomIn();
-    e.shiftKey && e.key === 'ArrowDown' && onZoomOut();
-    e.ctrlKey && e.key === '=' && onZoomIn();
-    e.ctrlKey && e.key === '-' && onZoomOut();
-    e.ctrlKey && e.key === 'ArrowLeft' && onRotateLeft();
-    e.ctrlKey && e.key === 'ArrowRight' && onRotateRight();
-    if (!selectedPages.length) return;
-    if (e.key === 'Backspace') setup.pageNumber = selectedPages.pop()!;
-    if (e.key === 'Enter' && !setup.confirmProcessDialogOpen)
-      setup.confirmProcessDialogOpen = true;
-  }}
+  onmousedown={handleMouseDown}
+  ondblclick={handleDoubleClick}
+  onwheel={handleWheel}
+  onkeydown={handleKeyDown}
 />
 
 <div
@@ -405,17 +476,9 @@
         class={setup.numPages ? '' : 'pointer-events-none'}
         bind:this={renderCanvas}
       ></canvas>
-      <svg class="absolute left-0 top-0" bind:this={textLayerSvg}></svg>
+      <svg class="absolute left-0 top-0" bind:this={textLayer}></svg>
       <canvas
-        bind:this={selectedCanvas}
-        class:hidden={!selectedPages.includes(setup.pageNumber) ||
-          processingPages.includes(setup.pageNumber)}
-        class="pointer-events-none absolute left-0 top-0"
-      ></canvas>
-      <canvas
-        bind:this={processingCanvas}
-        class:hidden={!processingPages.includes(setup.pageNumber) ||
-          selectedPages.includes(setup.pageNumber)}
+        bind:this={statusCanvas}
         class="pointer-events-none absolute left-0 top-0"
       ></canvas>
     </div>
@@ -429,7 +492,7 @@
         <Button
           class=" aspect-square h-8 w-8 font-semibold"
           size="sm"
-          on:click={() => onSelectPageRepresentation(page)}>{page}</Button
+          onclick={() => handlePageNumberClick(page)}>{page}</Button
         >
       {/each}
     </div>
@@ -439,25 +502,25 @@
     <Button
       tabindex={-1}
       size="icon"
-      on:click={onRotateLeft}
+      onclick={handleRotateLeft}
       disabled={!setup.numPages}><RotateCcw /></Button
     >
     <Button
       tabindex={-1}
       size="icon"
-      on:click={onRotateRight}
+      onclick={handleRotateRight}
       disabled={!setup.numPages}><RotateCw /></Button
     >
     <Button
       tabindex={-1}
       size="icon"
-      on:click={onZoomIn}
+      onclick={handleZoomIn}
       disabled={!setup.numPages || setup.scale === 10}><ZoomIn /></Button
     >
     <Button
       tabindex={-1}
       size="icon"
-      on:click={onZoomOut}
+      onclick={handleZoomOut}
       disabled={!setup.numPages || setup.scale === 0.5}><ZoomOut /></Button
     >
   </div>
@@ -466,7 +529,7 @@
     tabindex={-1}
     class="absolute bottom-4 left-4 "
     size="icon"
-    on:click={onSelectPDF}><FolderOpen /></Button
+    onclick={handleSelectPDF}><FolderOpen /></Button
   >
 
   <div
@@ -475,14 +538,14 @@
     <Button
       tabindex={-1}
       size="icon"
-      on:click={onFirstPage}
+      onclick={handleFirstPage}
       disabled={!setup.numPages || setup.pageNumber === 1}
       ><ChevronFirst /></Button
     >
     <Button
       tabindex={-1}
       size="icon"
-      on:click={onPrevPage}
+      onclick={handlePrevPage}
       disabled={!setup.numPages || setup.pageNumber === 1}><ArrowLeft /></Button
     >
     <Input
@@ -497,14 +560,14 @@
     <Button
       tabindex={-1}
       size="icon"
-      on:click={onNextPage}
+      onclick={handleNextPage}
       disabled={!setup.numPages || setup.pageNumber === setup.numPages}
       ><ArrowRight /></Button
     >
     <Button
       tabindex={-1}
       size="icon"
-      on:click={onLastPage}
+      onclick={handleLastPage}
       disabled={!setup.numPages || setup.pageNumber === setup.numPages}
       ><ChevronLast /></Button
     >
@@ -529,13 +592,13 @@
               : 'Processar página selecionada?'}
           </Dialog.Title>
           <Dialog.Description>
-            {dialogText()}
+            {selectedPagesText}
           </Dialog.Description>
         </Dialog.Header>
         <Dialog.Footer>
           <Button
-            on:click={() => {
-              onProcessPages();
+            onclick={() => {
+              handleProcessPages();
               setup.confirmProcessDialogOpen = false;
             }}>Processar</Button
           >
@@ -546,9 +609,9 @@
     <Button
       tabindex={-1}
       size="icon"
-      on:click={(e) => (
+      onclick={(e: MouseEvent) => (
         setup.isActive && e.stopImmediatePropagation(),
-        onSelectPage(setup.pageNumber)
+        handleSelectPage()
       )}
       disabled={!setup.numPages || processingPages.includes(setup.pageNumber)}
     >

@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { extractPDFImages } from '$lib/llm';
+
   import * as pdfjs from 'pdfjs-dist';
 
   import { untrack } from 'svelte';
@@ -20,10 +22,15 @@
   import FileMinus from 'lucide-svelte/icons/file-minus';
   import FileCheck from 'lucide-svelte/icons/file-check';
 
-  import { homeDir } from '@tauri-apps/api/path';
-  import { readFile, exists } from '@tauri-apps/plugin-fs';
+  import { homeDir, resolve } from '@tauri-apps/api/path';
+  import {
+    readFile,
+    exists,
+    mkdir,
+    readDir,
+    remove,
+  } from '@tauri-apps/plugin-fs';
   import { open } from '@tauri-apps/plugin-dialog';
-  import { Command } from '@tauri-apps/plugin-shell';
 
   import type {
     PDFDocumentProxy,
@@ -377,15 +384,6 @@
     }
   };
 
-  const extractPages = async (path: string) => {
-    const sidecar_command = Command.sidecar('binaries/extract-pdf-pages', path);
-    const output = await sidecar_command.execute();
-    if (output.code !== 0) {
-      throw new Error(output.stderr);
-    }
-    return output.stdout.trim();
-  };
-
   const handleProcessPages = () => {
     processingPages.push(...selectedPages);
     selectedPages.splice(0, selectedPages.length);
@@ -406,20 +404,64 @@
     Math.min(Math.max(1, setup.pageNumber), setup.numPages),
   );
 
+  async function checkWebpFiles(dataPath: string) {
+    try {
+      const files = await readDir(dataPath);
+      const webpFiles = files.filter((file) => file.name.endsWith('.webp'));
+      if (webpFiles.length === setup.numPages) {
+        console.log('Number of .webp files matches numPages');
+      } else {
+        console.log(
+          `Mismatch: ${webpFiles.length} .webp files found, expected ${setup.numPages}`,
+        );
+        let allRemovalsSuccessful = true;
+        for (const file of files) {
+          if (file.name.endsWith('.webp')) {
+            try {
+              await remove(`${dataPath}/${file.name}`);
+              console.log(`Removed file: ${file.name}`);
+            } catch (removeError) {
+              console.error(`Error removing file ${file.name}:`, removeError);
+              allRemovalsSuccessful = false;
+            }
+          }
+        }
+        console.log('Data folder cleared');
+        if (allRemovalsSuccessful) {
+          await resolve(dataPath, 'page-%d.webp').then((path) => {
+            extractPDFImages(setup.path!, path).then(() =>
+              console.log('Images extracted successfully'),
+            );
+          });
+        }
+      }
+      setup.pageNumber = 1;
+    } catch (error) {
+      console.error('Error checking .webp files:', error);
+    }
+  }
+
   // Verify data path and extract pages if necessary
   $effect(() => {
-    if (!setup.path) return;
+    if (!setup.path || !setup.numPages) return;
     const dataPath = setup.path.endsWith('.pdf')
       ? setup.path.replace('.pdf', '-data')
       : setup.path + '-data';
     exists(dataPath)
       .then((isExist) => {
         if (isExist) {
-          console.log('Pages data already extracted at: ' + dataPath);
+          console.log('Pages data dir already exists at: ' + dataPath);
+          checkWebpFiles(dataPath).then(() => {
+            console.log('Number of .webp files matches numPages');
+          });
         } else {
           console.log('Pages data not found. Extracting data from pages...');
-          extractPages(setup.path!).then(() => {
-            console.log('Pages data extracted successfully at: ' + dataPath);
+          mkdir(dataPath).then(() => {
+            resolve(dataPath, 'page-%d.webp').then((path) => {
+              extractPDFImages(setup.path!, path).then(() =>
+                console.log('Images extracted successfully'),
+              );
+            });
           });
         }
       })
@@ -610,8 +652,7 @@
       tabindex={-1}
       size="icon"
       onclick={(e: MouseEvent) => (
-        setup.isActive && e.stopImmediatePropagation(),
-        handleSelectPage()
+        setup.isActive && e.stopImmediatePropagation(), handleSelectPage()
       )}
       disabled={!setup.numPages || processingPages.includes(setup.pageNumber)}
     >

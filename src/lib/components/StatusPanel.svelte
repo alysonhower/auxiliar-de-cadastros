@@ -1,4 +1,4 @@
-<script lang="ts">
+<!-- <script lang="ts">
   let { selectedPages }: { selectedPages: number[] } = $props();
 </script>
 
@@ -13,4 +13,4 @@
       </div>
     {/each}
   </div>
-</div>
+</div> -->

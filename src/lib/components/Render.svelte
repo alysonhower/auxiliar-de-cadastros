@@ -1,27 +1,25 @@
 <script lang="ts">
+  // FIX PROCESSING PAGES WHEN ADD OTHER DOCUMENT
   import { extractPDFImages } from '$lib/llm';
-
   import * as pdfjs from 'pdfjs-dist';
-
   import { untrack } from 'svelte';
-
   import { Button, buttonVariants } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
   import * as Dialog from '$lib/components/ui/dialog';
-
-  import ZoomIn from 'lucide-svelte/icons/zoom-in';
-  import ZoomOut from 'lucide-svelte/icons/zoom-out';
-  import ChevronFirst from 'lucide-svelte/icons/chevron-first';
-  import ArrowLeft from 'lucide-svelte/icons/arrow-left';
-  import ArrowRight from 'lucide-svelte/icons/arrow-right';
-  import ChevronLast from 'lucide-svelte/icons/chevron-last';
-  import RotateCcw from 'lucide-svelte/icons/rotate-ccw';
-  import RotateCw from 'lucide-svelte/icons/rotate-cw';
-  import FolderOpen from 'lucide-svelte/icons/folder-open';
-  import FilePlus from 'lucide-svelte/icons/file-plus';
-  import FileMinus from 'lucide-svelte/icons/file-minus';
-  import FileCheck from 'lucide-svelte/icons/file-check';
-
+  import {
+    ZoomIn,
+    ZoomOut,
+    ChevronFirst,
+    ArrowLeft,
+    ArrowRight,
+    ChevronLast,
+    RotateCcw,
+    RotateCw,
+    FolderOpen,
+    FilePlus,
+    FileMinus,
+    FileCheck,
+  } from 'lucide-svelte/icons';
   import { homeDir, resolve } from '@tauri-apps/api/path';
   import {
     readFile,
@@ -31,23 +29,48 @@
     remove,
   } from '@tauri-apps/plugin-fs';
   import { open } from '@tauri-apps/plugin-dialog';
-
   import type {
     PDFDocumentProxy,
     PDFPageProxy,
   } from 'pdfjs-dist/types/src/pdf.d.ts';
-
   import type { TextContent, TextItem } from 'pdfjs-dist/types/src/display/api';
+  import { invoke } from '@tauri-apps/api/core';
 
+  // Constants
+  const MIN_SCALE = 0.4;
+  const MAX_SCALE = 10;
+  const ROTATION_INCREMENT = 90;
+  const ZOOM_INCREMENT = 0.1;
+
+  // Import PDFjs-dist worker
   pdfjs.GlobalWorkerOptions.workerSrc = new URL(
     'pdfjs-dist/build/pdf.worker.mjs',
     import.meta.url,
   ).toString();
 
-  let {
-    selectedPages,
-    processingPages,
-  }: { selectedPages: number[]; processingPages: number[] } = $props();
+  interface SetupState {
+    path: string | undefined;
+    dataPath: string | undefined;
+    document: PDFDocumentProxy | undefined;
+    page: PDFPageProxy | undefined;
+    scale: number;
+    rotation: number;
+    numPages: number;
+    pageNumber: number;
+    pageRendering: boolean;
+    pageNumPending: number | undefined;
+    metadata: any | undefined;
+    isActive: boolean;
+    isProcessing: boolean;
+    confirmProcessDialogOpen: boolean;
+  }
+
+  // Await fix Svelte5: Potential Ownership False Positive 'mutated a value owned...This is strongly discouraged...' #10649
+  // let { selectedPages, processingPages }: { selectedPages: number[]; processingPages: number[] } = $props();
+
+  let selectedPages = $state<number[]>([]);
+  let processingPages = $state<number[]>([]);
+  let processedPages = $state<number[]>([]);
 
   let component: HTMLDivElement;
   let canvasContainer: HTMLDivElement;
@@ -55,19 +78,20 @@
   let statusCanvas: HTMLCanvasElement;
   let textLayer: SVGSVGElement;
 
-  let setup = $state({
-    path: undefined as string | undefined,
-    dataPath: undefined as string | undefined,
-    document: undefined as PDFDocumentProxy | undefined,
-    page: undefined as PDFPageProxy | undefined,
+  let setup = $state<SetupState>({
+    path: undefined,
+    dataPath: undefined,
+    document: undefined,
+    page: undefined,
     scale: 1,
     rotation: 0,
     numPages: 0,
     pageNumber: 1,
     pageRendering: false,
-    pageNumPending: undefined as number | undefined,
-    metadata: undefined as undefined | any,
+    pageNumPending: undefined,
+    metadata: undefined,
     isActive: false,
+    isProcessing: false,
     confirmProcessDialogOpen: false,
   });
 
@@ -77,12 +101,11 @@
       const document = await pdfjs.getDocument({ data }).promise;
       setup.document = document;
       setup.numPages = document.numPages;
-      document.getMetadata().then((metadata) => {
-        setup.metadata = metadata;
-        console.log('Document loaded!\nMetadata:\n', metadata);
-      });
+      const metadata = await document.getMetadata();
+      setup.metadata = metadata;
+      console.log('Document loaded!\nMetadata:\n', metadata);
     } catch (error) {
-      console.error('Error loading document:', error);
+      handleError('Error loading document:', error);
     }
   };
 
@@ -122,74 +145,101 @@
     viewportWidth: number,
     viewportHeight: number,
   ) => {
-    const fontSize = Math.min(viewportWidth, viewportHeight) * 0.05;
-    if (processingPages.includes(pageNumber)) {
-      canvasContext.clearRect(0, 0, viewportWidth, viewportHeight);
-      const text = `Página ${pageNumber} em processamento...`;
-      canvasContext.font = `bold ${fontSize}px Arial`;
-      const textWidth = canvasContext.measureText(text).width;
-      const x = (viewportWidth - textWidth) / 2;
-      const y = (viewportHeight + fontSize) / 2 - fontSize / 2;
-      canvasContext.fillStyle = 'rgba(186, 79, 125, 0.7)';
-      canvasContext.fillRect(0, 0, viewportWidth, viewportHeight);
-      canvasContext.fillStyle = 'rgba(232, 227, 229, 1)';
-      canvasContext.fillText(text, x, y);
+    const fontSize = Math.min(viewportWidth, viewportHeight) * 0.07;
+    canvasContext.clearRect(0, 0, viewportWidth, viewportHeight);
+
+    let text: string;
+    let bgColor: string;
+    let textColor: string;
+    let borderColor: string;
+
+    if (processedPages.includes(pageNumber)) {
+      text = `Página ${pageNumber} processada`;
+      bgColor = 'rgba(186, 79, 125, 0.2)';
+      textColor = 'rgba(156, 49, 95, 1)';
+      borderColor = 'rgba(186, 79, 125, 1)';
+    } else if (processingPages.includes(pageNumber)) {
+      text = `Página ${pageNumber} em processamento...`;
+      bgColor = 'rgba(255, 223, 186, 0.5)';
+      textColor = 'rgba(186, 79, 25, 1)';
+      borderColor = 'rgba(255, 165, 0, 0.8)';
     } else if (selectedPages.includes(pageNumber)) {
-      canvasContext.clearRect(0, 0, viewportWidth, viewportHeight);
-      const text = `Página ${pageNumber} selecionada`;
-      canvasContext.font = `bold ${fontSize}px Arial`;
-      const textWidth = canvasContext.measureText(text).width;
-      const x = (viewportWidth - textWidth) / 2;
-      const y = (viewportHeight + fontSize) / 2 - fontSize / 2;
-      canvasContext.fillStyle = 'rgba(232, 227, 229, 0.7)';
-      canvasContext.fillRect(0, 0, viewportWidth, viewportHeight);
-      canvasContext.fillStyle = 'rgba(186, 79, 125, 1)';
-      canvasContext.fillText(text, x, y);
+      text = `Página ${pageNumber} selecionada`;
+      bgColor = 'rgba(173, 216, 230, 0.5)';
+      textColor = 'rgba(0, 90, 156, 1)';
+      borderColor = 'rgba(70, 130, 180, 0.8)';
     } else {
-      canvasContext.clearRect(0, 0, viewportWidth, viewportHeight);
+      return;
     }
+
+    canvasContext.font = `bold ${fontSize}px Arial`;
+    const textWidth = canvasContext.measureText(text).width;
+    const x = (viewportWidth - textWidth) / 2;
+    const y = (viewportHeight + fontSize) / 2 - fontSize / 2;
+
+    canvasContext.strokeStyle = borderColor;
+    canvasContext.lineWidth = 8;
+    canvasContext.strokeRect(4, 4, viewportWidth - 8, viewportHeight - 8);
+
+    canvasContext.fillStyle = bgColor;
+    canvasContext.fillRect(8, 8, viewportWidth - 16, viewportHeight - 16);
+
+    canvasContext.shadowColor = 'rgba(255, 255, 255, 0.7)';
+    canvasContext.shadowBlur = 5;
+    canvasContext.shadowOffsetX = 1;
+    canvasContext.shadowOffsetY = 1;
+    canvasContext.fillStyle = textColor;
+    canvasContext.fillText(text, x, y);
+
+    canvasContext.strokeStyle = 'rgba(0, 0, 0, 0.4)';
+    canvasContext.lineWidth = 3;
+    canvasContext.strokeText(text, x, y);
   };
 
   const loadPage = async (pageNumber: number) => {
     setup.pageRendering = true;
 
-    const page = await setup.document!.getPage(pageNumber);
-    const textContent = await page.getTextContent();
+    try {
+      const page = await setup.document!.getPage(pageNumber);
+      const textContent = await page.getTextContent();
 
-    const viewport = page.getViewport({
-      scale: setup.scale,
-      rotation: setup.rotation,
-    });
+      const viewport = page.getViewport({
+        scale: setup.scale,
+        rotation: setup.rotation,
+      });
 
-    const { height, width } = viewport;
+      const { height, width } = viewport;
 
-    renderCanvas.height = height;
-    renderCanvas.width = width;
-    statusCanvas.height = height;
-    statusCanvas.width = width;
+      renderCanvas.height = height;
+      renderCanvas.width = width;
+      statusCanvas.height = height;
+      statusCanvas.width = width;
 
-    const canvasContext = renderCanvas.getContext('2d');
-    const statusCanvasContext = statusCanvas.getContext('2d');
+      const canvasContext = renderCanvas.getContext('2d');
+      const statusCanvasContext = statusCanvas.getContext('2d');
 
-    if (canvasContext && statusCanvasContext) {
-      applyStatusCanvasStyles(pageNumber, statusCanvasContext, width, height);
+      if (canvasContext && statusCanvasContext) {
+        applyStatusCanvasStyles(pageNumber, statusCanvasContext, width, height);
 
-      const renderContext = {
-        canvasContext,
-        viewport,
-      };
+        const renderContext = {
+          canvasContext,
+          viewport,
+        };
 
-      const renderTask = page.render(renderContext);
-      await renderTask.promise;
+        await page.render(renderContext).promise;
 
-      buildTextLayer(viewport, textContent);
-    }
+        buildTextLayer(viewport, textContent);
+      }
 
-    setup.pageRendering = false;
+      setup.pageRendering = false;
 
-    if (setup.pageNumPending !== undefined) {
-      loadPageQueue(setup.pageNumPending);
-      setup.pageNumPending = undefined;
+      if (setup.pageNumPending !== undefined) {
+        loadPageQueue(setup.pageNumPending);
+        setup.pageNumPending = undefined;
+      }
+    } catch (error) {
+      handleError('Error loading page:', error);
+      setup.pageRendering = false;
     }
   };
 
@@ -210,7 +260,10 @@
 
   const updateScale = (delta: number) => {
     const scaleFactor = Math.exp(delta);
-    setup.scale = Math.min(10, Math.max(0.4, setup.scale! * scaleFactor));
+    setup.scale = Math.min(
+      MAX_SCALE,
+      Math.max(MIN_SCALE, setup.scale * scaleFactor),
+    );
   };
 
   const updateRotation = (delta: number) => {
@@ -218,27 +271,35 @@
   };
 
   const handleFirstPage = () => (setup.pageNumber = 1);
-  const handleLastPage = () => (setup.pageNumber = setup.numPages!);
+  const handleLastPage = () => (setup.pageNumber = setup.numPages);
   const handlePrevPage = () => updatePageNumber(-1);
   const handleNextPage = () => updatePageNumber(1);
-  const handleZoomIn = () => updateScale(0.4);
-  const handleZoomOut = () => updateScale(-0.4);
-  const handleRotateLeft = () => updateRotation(-90);
-  const handleRotateRight = () => updateRotation(90);
+  const handleZoomIn = () => updateScale(ZOOM_INCREMENT);
+  const handleZoomOut = () => updateScale(-ZOOM_INCREMENT);
+  const handleRotateLeft = () => updateRotation(-ROTATION_INCREMENT);
+  const handleRotateRight = () => updateRotation(ROTATION_INCREMENT);
 
   const handleSelectPDF = async () => {
-    const file = await open({
-      multiple: false,
-      directory: false,
-      filters: [{ name: 'PDF', extensions: ['pdf'] }],
-      title: 'Por favor, selecione um PDF',
-      defaultPath: await homeDir(),
-    });
-    if (file) setup.path = file.path;
+    try {
+      const file = await open({
+        multiple: false,
+        directory: false,
+        filters: [{ name: 'PDF', extensions: ['pdf'] }],
+        title: 'Por favor, selecione um PDF',
+        defaultPath: await homeDir(),
+      });
+      if (file) setup.path = file.path;
+    } catch (error) {
+      handleError('Error selecting PDF:', error);
+    }
   };
 
   const handleSelectPage = () => {
-    if (processingPages.includes(validPageNumber)) return;
+    if (
+      processingPages.includes(validPageNumber) ||
+      processedPages.includes(validPageNumber)
+    )
+      return;
     const pageNumber = validPageNumber;
     const index = selectedPages.indexOf(pageNumber);
     if (index !== -1) {
@@ -247,19 +308,36 @@
       selectedPages.push(pageNumber);
     }
     selectedPages.sort((a, b) => a - b);
+    updatePageNumberAfterSelection(pageNumber);
+    console.log(
+      selectedPages.length > 0
+        ? selectedPagesText
+        : 'Nenhuma página selecionada.',
+    );
+  };
+
+  const updatePageNumberAfterSelection = (pageNumber: number) => {
     const currentIndex = selectedPages.indexOf(pageNumber);
     if (currentIndex === -1) {
       const prevSelectedPage = selectedPages
         .slice()
         .reverse()
-        .find((page) => page < pageNumber && !processingPages.includes(page));
+        .find(
+          (page) =>
+            page < pageNumber &&
+            !processingPages.includes(page) &&
+            !processedPages.includes(page),
+        );
       const nextSelectedPage = selectedPages.find(
-        (page) => page > pageNumber && !processingPages.includes(page),
+        (page) =>
+          page > pageNumber &&
+          !processingPages.includes(page) &&
+          !processedPages.includes(page),
       );
       setup.pageNumber = prevSelectedPage || nextSelectedPage || pageNumber;
     } else {
       const prevUnselectedPage = Array.from(
-        { length: setup.numPages! },
+        { length: setup.numPages },
         (_, i) => i + 1,
       )
         .slice()
@@ -268,24 +346,21 @@
           (page) =>
             page < pageNumber &&
             !selectedPages.includes(page) &&
-            !processingPages.includes(page),
+            !processingPages.includes(page) &&
+            !processedPages.includes(page),
         );
       const nextUnselectedPage = Array.from(
-        { length: setup.numPages! },
+        { length: setup.numPages },
         (_, i) => i + 1,
       ).find(
         (page) =>
           page > pageNumber &&
           !selectedPages.includes(page) &&
-          !processingPages.includes(page),
+          !processingPages.includes(page) &&
+          !processedPages.includes(page),
       );
       setup.pageNumber = prevUnselectedPage || nextUnselectedPage || pageNumber;
     }
-    console.log(
-      selectedPages.length > 0
-        ? selectedPagesText
-        : 'Nenhuma página selecionada.',
-    );
   };
 
   const handlePageNumberClick = (pageNumber: number) => {
@@ -314,9 +389,9 @@
     if (!setup.isActive) return;
 
     if (e.ctrlKey && e.shiftKey) {
-      updateRotation(e.deltaY < 0 ? 90 : -90);
+      updateRotation(e.deltaY < 0 ? ROTATION_INCREMENT : -ROTATION_INCREMENT);
     } else if (e.ctrlKey) {
-      updateScale(e.deltaY < 0 ? 0.1 : -0.1);
+      updateScale(e.deltaY < 0 ? ZOOM_INCREMENT : -ZOOM_INCREMENT);
     } else if (e.altKey) {
       updatePageNumber(e.deltaY < 0 ? -1 : 1);
     }
@@ -385,7 +460,24 @@
   };
 
   const handleProcessPages = () => {
+    if (setup.isProcessing) return;
+    setup.isProcessing = true;
     processingPages.push(...selectedPages);
+    let processPages: string[] = [];
+    for (const pageNumber of processingPages) {
+      processPages.push(`${setup.dataPath}\\page-${pageNumber}.webp`);
+    }
+    invoke('call_anthropic', {
+      paths: processPages,
+    })
+      .then((res) => {
+        console.log(res);
+        processedPages.push(...processingPages);
+        processingPages.splice(0, processingPages.length);
+        setup.isProcessing = false;
+      })
+      .catch((err) => console.log(err));
+
     selectedPages.splice(0, selectedPages.length);
     console.log('Páginas processadas: ' + processingPages);
   };
@@ -414,58 +506,70 @@
         console.log(
           `Mismatch: ${webpFiles.length} .webp files found, expected ${setup.numPages}`,
         );
-        let allRemovalsSuccessful = true;
-        for (const file of files) {
-          if (file.name.endsWith('.webp')) {
-            try {
-              await remove(`${dataPath}/${file.name}`);
-              console.log(`Removed file: ${file.name}`);
-            } catch (removeError) {
-              console.error(`Error removing file ${file.name}:`, removeError);
-              allRemovalsSuccessful = false;
-            }
-          }
-        }
-        console.log('Data folder cleared');
-        if (allRemovalsSuccessful) {
-          await resolve(dataPath, 'page-%d.webp').then((path) => {
-            extractPDFImages(setup.path!, path).then(() =>
-              console.log('Images extracted successfully'),
-            );
-          });
-        }
+        await clearDataFolder(dataPath, files);
+        await extractImages(dataPath);
       }
       setup.pageNumber = 1;
     } catch (error) {
-      console.error('Error checking .webp files:', error);
+      handleError('Error checking .webp files:', error);
     }
   }
 
+  async function clearDataFolder(dataPath: string, files: any[]) {
+    let allRemovalsSuccessful = true;
+    for (const file of files) {
+      if (file.name.endsWith('.webp')) {
+        try {
+          await remove(`${dataPath}/${file.name}`);
+          console.log(`Removed file: ${file.name}`);
+        } catch (removeError) {
+          handleError(`Error removing file ${file.name}:`, removeError);
+          allRemovalsSuccessful = false;
+        }
+      }
+    }
+    console.log('Data folder cleared');
+    return allRemovalsSuccessful;
+  }
+
+  async function extractImages(dataPath: string) {
+    try {
+      const path = await resolve(dataPath, 'page-%d.webp');
+      await extractPDFImages(setup.path!, path);
+      console.log('Images extracted successfully');
+    } catch (error) {
+      handleError('Error extracting images:', error);
+    }
+  }
+
+  function handleError(message: string, error: any) {
+    console.error(message, error);
+    // TODO: Implement user-facing error handling
+  }
+
   // Verify data path and extract pages if necessary
-  $effect(() => {
+  $effect.pre(() => {
     if (!setup.path || !setup.numPages) return;
     const dataPath = setup.path.endsWith('.pdf')
       ? setup.path.replace('.pdf', '-data')
       : setup.path + '-data';
     exists(dataPath)
-      .then((isExist) => {
+      .then(async (isExist) => {
         if (isExist) {
           console.log('Pages data dir already exists at: ' + dataPath);
-          checkWebpFiles(dataPath).then(() => {
-            console.log('Number of .webp files matches numPages');
-          });
+          return checkWebpFiles(dataPath);
         } else {
           console.log('Pages data not found. Extracting data from pages...');
-          mkdir(dataPath).then(() => {
-            resolve(dataPath, 'page-%d.webp').then((path) => {
-              extractPDFImages(setup.path!, path).then(() =>
-                console.log('Images extracted successfully'),
-              );
-            });
-          });
+          await mkdir(dataPath);
+          return await extractImages(dataPath);
         }
       })
-      .then(() => (setup.dataPath = dataPath));
+      .then(() => {
+        setup.dataPath = dataPath;
+      })
+      .catch((error) => {
+        handleError('Error processing PDF:', error);
+      });
   });
 
   // Load document
@@ -532,10 +636,12 @@
     >
       {#each selectedPages as page}
         <Button
-          class=" aspect-square h-8 w-8 font-semibold"
+          class="aspect-square h-8 w-8 font-semibold"
           size="sm"
-          onclick={() => handlePageNumberClick(page)}>{page}</Button
+          onclick={() => handlePageNumberClick(page)}
         >
+          {page}
+        </Button>
       {/each}
     </div>
   {/if}
@@ -545,34 +651,49 @@
       tabindex={-1}
       size="icon"
       onclick={handleRotateLeft}
-      disabled={!setup.numPages}><RotateCcw /></Button
+      disabled={!setup.numPages}
+      aria-label="Rotate left"
     >
+      <RotateCcw />
+    </Button>
     <Button
       tabindex={-1}
       size="icon"
       onclick={handleRotateRight}
-      disabled={!setup.numPages}><RotateCw /></Button
+      disabled={!setup.numPages}
+      aria-label="Rotate right"
     >
+      <RotateCw />
+    </Button>
     <Button
       tabindex={-1}
       size="icon"
       onclick={handleZoomIn}
-      disabled={!setup.numPages || setup.scale === 10}><ZoomIn /></Button
+      disabled={!setup.numPages || setup.scale === MAX_SCALE}
+      aria-label="Zoom in"
     >
+      <ZoomIn />
+    </Button>
     <Button
       tabindex={-1}
       size="icon"
       onclick={handleZoomOut}
-      disabled={!setup.numPages || setup.scale === 0.5}><ZoomOut /></Button
+      disabled={!setup.numPages || setup.scale === MIN_SCALE}
+      aria-label="Zoom out"
     >
+      <ZoomOut />
+    </Button>
   </div>
 
   <Button
     tabindex={-1}
-    class="absolute bottom-4 left-4 "
+    class="absolute bottom-4 left-4"
     size="icon"
-    onclick={handleSelectPDF}><FolderOpen /></Button
+    onclick={handleSelectPDF}
+    aria-label="Open PDF"
   >
+    <FolderOpen />
+  </Button>
 
   <div
     class="absolute bottom-4 left-1/2 flex -translate-x-1/2 scale-90 transform items-center justify-center space-x-2"
@@ -582,14 +703,19 @@
       size="icon"
       onclick={handleFirstPage}
       disabled={!setup.numPages || setup.pageNumber === 1}
-      ><ChevronFirst /></Button
+      aria-label="First page"
     >
+      <ChevronFirst />
+    </Button>
     <Button
       tabindex={-1}
       size="icon"
       onclick={handlePrevPage}
-      disabled={!setup.numPages || setup.pageNumber === 1}><ArrowLeft /></Button
+      disabled={!setup.numPages || setup.pageNumber === 1}
+      aria-label="Previous page"
     >
+      <ArrowLeft />
+    </Button>
     <Input
       class="h-12 w-20 text-center text-2xl font-semibold text-primary focus:outline-none"
       tabindex={-1}
@@ -598,21 +724,26 @@
       min="1"
       max={setup.numPages}
       disabled={!setup.numPages}
+      aria-label="Page number"
     />
     <Button
       tabindex={-1}
       size="icon"
       onclick={handleNextPage}
       disabled={!setup.numPages || setup.pageNumber === setup.numPages}
-      ><ArrowRight /></Button
+      aria-label="Next page"
     >
+      <ArrowRight />
+    </Button>
     <Button
       tabindex={-1}
       size="icon"
       onclick={handleLastPage}
       disabled={!setup.numPages || setup.pageNumber === setup.numPages}
-      ><ChevronLast /></Button
+      aria-label="Last page"
     >
+      <ChevronLast />
+    </Button>
   </div>
 
   <div class="absolute bottom-4 right-4 flex flex-col space-y-2">
@@ -623,6 +754,7 @@
           selectedPages.length === 0 ||
           processingPages.includes(setup.pageNumber)}
         class={buttonVariants({ size: 'icon', className: '' })}
+        aria-label="Process selected pages"
       >
         <FileCheck />
       </Dialog.Trigger>
@@ -642,8 +774,10 @@
             onclick={() => {
               handleProcessPages();
               setup.confirmProcessDialogOpen = false;
-            }}>Processar</Button
+            }}
           >
+            Processar
+          </Button>
         </Dialog.Footer>
       </Dialog.Content>
     </Dialog.Root>
@@ -651,10 +785,16 @@
     <Button
       tabindex={-1}
       size="icon"
-      onclick={(e: MouseEvent) => (
-        setup.isActive && e.stopImmediatePropagation(), handleSelectPage()
-      )}
-      disabled={!setup.numPages || processingPages.includes(setup.pageNumber)}
+      onclick={(e: MouseEvent) => {
+        setup.isActive && e.stopImmediatePropagation();
+        handleSelectPage();
+      }}
+      disabled={!setup.numPages ||
+        processingPages.includes(setup.pageNumber) ||
+        processedPages.includes(setup.pageNumber)}
+      aria-label={selectedPages.includes(setup.pageNumber)
+        ? 'Deselect page'
+        : 'Select page'}
     >
       {#if selectedPages.includes(setup.pageNumber)}
         <FileMinus />

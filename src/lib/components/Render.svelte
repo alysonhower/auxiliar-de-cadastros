@@ -65,11 +65,8 @@
     confirmProcessDialogOpen: boolean;
   }
 
-  // Await fix Svelte5: Potential Ownership False Positive 'mutated a value owned...This is strongly discouraged...' #10649
-  // let { selectedPages, processingPages }: { selectedPages: number[]; processingPages: number[] } = $props();
+  let { selectedPages = $bindable(), processingPages = $bindable() }: { selectedPages: number[]; processingPages: number[] } = $props();
 
-  let selectedPages = $state<number[]>([]);
-  let processingPages = $state<number[]>([]);
   let processedPages = $state<number[]>([]);
 
   let component: HTMLDivElement;

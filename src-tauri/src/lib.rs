@@ -1,5 +1,5 @@
 mod llm;
-use llm::call_anthropic;
+use llm::anthropic_pipeline;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -8,7 +8,7 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![call_anthropic])
+        .invoke_handler(tauri::generate_handler![anthropic_pipeline])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

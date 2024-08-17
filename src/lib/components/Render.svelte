@@ -29,12 +29,9 @@
     remove,
   } from '@tauri-apps/plugin-fs';
   import { open } from '@tauri-apps/plugin-dialog';
-  import type {
-    PDFDocumentProxy,
-    PDFPageProxy,
-  } from 'pdfjs-dist/types/src/pdf.d.ts';
   import type { TextContent, TextItem } from 'pdfjs-dist/types/src/display/api';
   import { invoke } from '@tauri-apps/api/core';
+    import type { ProcessedPage, SetupState, FileNameGeneration } from '$lib/types';
 
   // Constants
   const MIN_SCALE = 0.4;
@@ -48,26 +45,7 @@
     import.meta.url,
   ).toString();
 
-  interface SetupState {
-    path: string | undefined;
-    dataPath: string | undefined;
-    document: PDFDocumentProxy | undefined;
-    page: PDFPageProxy | undefined;
-    scale: number;
-    rotation: number;
-    numPages: number;
-    pageNumber: number;
-    pageRendering: boolean;
-    pageNumPending: number | undefined;
-    metadata: any | undefined;
-    isActive: boolean;
-    isProcessing: boolean;
-    confirmProcessDialogOpen: boolean;
-  }
-
-  let { selectedPages = $bindable(), processingPages = $bindable() }: { selectedPages: number[]; processingPages: number[] } = $props();
-
-  let processedPages = $state<number[]>([]);
+  let { selectedPages = $bindable(), processingPages = $bindable(), processedPages = $bindable() }: { selectedPages: number[]; processingPages: number[]; processedPages: ProcessedPage[] } = $props();
 
   let component: HTMLDivElement;
   let canvasContainer: HTMLDivElement;
@@ -150,7 +128,7 @@
     let textColor: string;
     let borderColor: string;
 
-    if (processedPages.includes(pageNumber)) {
+    if (processedPages.some(pp => pp.pages.includes(pageNumber))) {
       text = `Página ${pageNumber} processada`;
       bgColor = 'rgba(186, 79, 125, 0.2)';
       textColor = 'rgba(156, 49, 95, 1)';
@@ -294,7 +272,7 @@
   const handleSelectPage = () => {
     if (
       processingPages.includes(validPageNumber) ||
-      processedPages.includes(validPageNumber)
+      processedPages.some(pp => pp.pages.includes(validPageNumber))
     )
       return;
     const pageNumber = validPageNumber;
@@ -323,13 +301,13 @@
           (page) =>
             page < pageNumber &&
             !processingPages.includes(page) &&
-            !processedPages.includes(page),
+            !processedPages.some(pp => pp.pages.includes(page)),
         );
       const nextSelectedPage = selectedPages.find(
         (page) =>
           page > pageNumber &&
           !processingPages.includes(page) &&
-          !processedPages.includes(page),
+          !processedPages.some(pp => pp.pages.includes(page)),
       );
       setup.pageNumber = prevSelectedPage || nextSelectedPage || pageNumber;
     } else {
@@ -344,7 +322,7 @@
             page < pageNumber &&
             !selectedPages.includes(page) &&
             !processingPages.includes(page) &&
-            !processedPages.includes(page),
+            !processedPages.some(pp => pp.pages.includes(page))
         );
       const nextUnselectedPage = Array.from(
         { length: setup.numPages },
@@ -354,7 +332,7 @@
           page > pageNumber &&
           !selectedPages.includes(page) &&
           !processingPages.includes(page) &&
-          !processedPages.includes(page),
+          !processedPages.some(pp => pp.pages.includes(page))
       );
       setup.pageNumber = prevUnselectedPage || nextUnselectedPage || pageNumber;
     }
@@ -389,15 +367,17 @@
       updateRotation(e.deltaY < 0 ? ROTATION_INCREMENT : -ROTATION_INCREMENT);
     } else if (e.ctrlKey) {
       updateScale(e.deltaY < 0 ? ZOOM_INCREMENT : -ZOOM_INCREMENT);
-    } else if (e.altKey) {
-      updatePageNumber(e.deltaY < 0 ? -1 : 1);
     }
   };
 
   const handleKeyDown = (e: KeyboardEvent) => {
     if (!setup.isActive) return;
 
-    e.key === 'Escape' && handleSelectPDF();
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      handleSelectPDF();
+      return;
+    }
 
     if (!setup.numPages) return;
 
@@ -422,8 +402,18 @@
         if (selectedPages.length) setup.pageNumber = selectedPages.pop()!;
         break;
       case 'Enter':
-        if (selectedPages.length && !setup.confirmProcessDialogOpen)
+        if (selectedPages.length && !setup.confirmProcessDialogOpen) {
+          e.preventDefault();
           setup.confirmProcessDialogOpen = true;
+        }
+        break;
+      case 'Tab':  // Added Tab key handler
+        e.preventDefault();
+        if (e.shiftKey) {
+          handlePrevPage();
+        } else {
+          handleNextPage();
+        }
         break;
     }
 
@@ -464,16 +454,24 @@
     for (const pageNumber of processingPages) {
       processPages.push(`${setup.dataPath}\\page-${pageNumber}.webp`);
     }
-    invoke('call_anthropic', {
+    invoke<FileNameGeneration>('anthropic_pipeline', {
       paths: processPages,
     })
       .then((res) => {
-        console.log(res);
-        processedPages.push(...processingPages);
+        const newProcessedPages: ProcessedPage = {
+          file_name: res.file_name,
+          pages: [...processingPages],
+          debug: res
+        };
+        console.log("New processed pages:", newProcessedPages);
+        processedPages.push(newProcessedPages);
         processingPages.splice(0, processingPages.length);
         setup.isProcessing = false;
       })
-      .catch((err) => console.log(err));
+      .catch((err) => {
+        console.error("Error in anthropic_pipeline:", err);
+        setup.isProcessing = false;
+      });
 
     selectedPages.splice(0, selectedPages.length);
     console.log('Páginas processadas: ' + processingPages);
@@ -772,6 +770,7 @@
               handleProcessPages();
               setup.confirmProcessDialogOpen = false;
             }}
+            autofocus
           >
             Processar
           </Button>
@@ -788,7 +787,7 @@
       }}
       disabled={!setup.numPages ||
         processingPages.includes(setup.pageNumber) ||
-        processedPages.includes(setup.pageNumber)}
+        processedPages.some(pp => pp.pages.includes(setup.pageNumber))}
       aria-label={selectedPages.includes(setup.pageNumber)
         ? 'Deselect page'
         : 'Select page'}

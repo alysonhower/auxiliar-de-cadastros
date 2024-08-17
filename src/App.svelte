@@ -7,7 +7,7 @@
 
 <main class="h-screen w-screen">
   <ModeWatcher />
-  <div class="absolute left-2 top-2">
+  <div class="absolute left-2 bottom-2">
     <LightSwitch />
   </div>
   <ResizableLayout />

@@ -43,7 +43,10 @@ pub struct OutputError {
 #[derive(Serialize, Deserialize)]
 pub struct DocumentInfo {
     pub file_name: String,
+    #[serde(default)]
+    pub file_name_history: Vec<String>,
     pub reasoning: Reasoning,
+    pub json_file_path: String,
 }
 
 #[derive(Serialize, Deserialize)]

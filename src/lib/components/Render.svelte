@@ -2,7 +2,7 @@
   // FIX PROCESSING PAGES WHEN ADD OTHER DOCUMENT
   import { extractPDFImages } from '$lib/llm';
   import * as pdfjs from 'pdfjs-dist';
-  import { untrack } from 'svelte';
+  import { getContext, untrack } from 'svelte';
   import { Button, buttonVariants } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
   import * as Dialog from '$lib/components/ui/dialog';
@@ -31,8 +31,9 @@
   import { open } from '@tauri-apps/plugin-dialog';
   import type { TextContent, TextItem } from 'pdfjs-dist/types/src/display/api';
   import { invoke } from '@tauri-apps/api/core';
-  import type { ProcessingPage, ProcessedDocument, SetupState, FileNameGeneration } from '$lib/types';
+  import type { SetupState, FileNameGeneration, ProcessingPage, ProcessedDocument } from '$lib/types';
   import { v4 as uuidv4 } from 'uuid';
+  import type { DocumentState } from './documentContext.svelte';
 
   // Constants
   const MIN_SCALE = 0.4;
@@ -46,7 +47,7 @@
     import.meta.url,
   ).toString();
 
-  let { selectedPages = $bindable(), processingPages = $bindable(), processedDocuments = $bindable() }: { selectedPages: number[]; processingPages: ProcessingPage[]; processedDocuments: ProcessedDocument[] } = $props();
+  const documentContext: DocumentState = getContext("documentContext");
 
   let component: HTMLDivElement;
   let canvasContainer: HTMLDivElement;
@@ -128,17 +129,17 @@
     let textColor: string;
     let borderColor: string;
 
-    if (processedDocuments.some(pp => pp.pages.includes(pageNumber))) {
+    if (documentContext.processedDocuments.some(pp => pp.pages.includes(pageNumber))) {
       text = `Página ${pageNumber} processada`;
       bgColor = 'rgba(186, 79, 125, 0.2)';
       textColor = 'rgba(156, 49, 95, 1)';
       borderColor = 'rgba(186, 79, 125, 1)';
-    } else if (processingPages.some(pp => pp.pages.includes(pageNumber))) {
+    } else if (documentContext.processingPages.some(pp => pp.pages.includes(pageNumber))) {
       text = `Página ${pageNumber} em processamento...`;
       bgColor = 'rgba(255, 223, 186, 0.5)';
       textColor = 'rgba(186, 79, 25, 1)';
       borderColor = 'rgba(255, 165, 0, 0.8)';
-    } else if (selectedPages.includes(pageNumber)) {
+    } else if (documentContext.selectedPages.includes(pageNumber)) {
       text = `Página ${pageNumber} selecionada`;
       bgColor = 'rgba(173, 216, 230, 0.5)';
       textColor = 'rgba(0, 90, 156, 1)';
@@ -271,43 +272,44 @@
 
   const handleSelectPage = () => {
     if (
-      processingPages.some(pp => pp.pages.includes(validPageNumber)) ||
-      processedDocuments.some(pp => pp.pages.includes(validPageNumber))
+      documentContext.processingPages.some(pp => pp.pages.includes(validPageNumber)) ||
+      documentContext.processedDocuments.some(pp => pp.pages.includes(validPageNumber))
     )
       return;
     const pageNumber = validPageNumber;
-    const index = selectedPages.indexOf(pageNumber);
+    const index = documentContext.selectedPages.indexOf(pageNumber);
+
     if (index !== -1) {
-      selectedPages.splice(index, 1);
+      documentContext.selectedPages.splice(index, 1);
     } else {
-      selectedPages.push(pageNumber);
+      documentContext.selectedPages.push(pageNumber);
     }
-    selectedPages.sort((a, b) => a - b);
+    documentContext.selectedPages.sort((a, b) => a - b);
     updatePageNumberAfterSelection(pageNumber);
     console.log(
-      selectedPages.length > 0
+      documentContext.selectedPages.length > 0
         ? selectedPagesText
         : 'Nenhuma página selecionada.',
     );
   };
 
   const updatePageNumberAfterSelection = (pageNumber: number) => {
-    const currentIndex = selectedPages.indexOf(pageNumber);
+    const currentIndex = documentContext.selectedPages.indexOf(pageNumber);
     if (currentIndex === -1) {
-      const prevSelectedPage = selectedPages
+      const prevSelectedPage = documentContext.selectedPages
         .slice()
         .reverse()
         .find(
           (page) =>
             page < pageNumber &&
-            !processingPages.some(pp => pp.pages.includes(page)) &&
-            !processedDocuments.some(pp => pp.pages.includes(page)),
+            !documentContext.processingPages.some(pp => pp.pages.includes(page)) &&
+            !documentContext.processedDocuments.some(pp => pp.pages.includes(page)),
         );
-      const nextSelectedPage = selectedPages.find(
+      const nextSelectedPage = documentContext.selectedPages.find(
         (page) =>
           page > pageNumber &&
-          !processingPages.some(pp => pp.pages.includes(page)) &&
-          !processedDocuments.some(pp => pp.pages.includes(page)),
+          !documentContext.processingPages.some(pp => pp.pages.includes(page)) &&
+          !documentContext.processedDocuments.some(pp => pp.pages.includes(page)),
       );
       setup.pageNumber = prevSelectedPage || nextSelectedPage || pageNumber;
     } else {
@@ -320,9 +322,9 @@
         .find(
           (page) =>
             page < pageNumber &&
-            !selectedPages.includes(page) &&
-            !processingPages.some(pp => pp.pages.includes(page)) &&
-            !processedDocuments.some(pp => pp.pages.includes(page))
+            !documentContext.selectedPages.includes(page) &&
+            !documentContext.processingPages.some(pp => pp.pages.includes(page)) &&
+            !documentContext.processedDocuments.some(pp => pp.pages.includes(page))
         );
       const nextUnselectedPage = Array.from(
         { length: setup.numPages },
@@ -330,9 +332,9 @@
       ).find(
         (page) =>
           page > pageNumber &&
-          !selectedPages.includes(page) &&
-          !processingPages.some(pp => pp.pages.includes(page)) &&
-          !processedDocuments.some(pp => pp.pages.includes(page))
+          !documentContext.selectedPages.includes(page) &&
+          !documentContext.processingPages.some(pp => pp.pages.includes(page)) &&
+          !documentContext.processedDocuments.some(pp => pp.pages.includes(page))
       );
       setup.pageNumber = prevUnselectedPage || nextUnselectedPage || pageNumber;
     }
@@ -399,15 +401,15 @@
         handleSelectPage();
         break;
       case 'Backspace':
-        if (selectedPages.length) setup.pageNumber = selectedPages.pop()!;
+        if (documentContext.selectedPages.length) setup.pageNumber = documentContext.selectedPages.pop()!;
         break;
       case 'Enter':
-        if (selectedPages.length && !setup.confirmProcessDialogOpen) {
+        if (documentContext.selectedPages.length && !setup.confirmProcessDialogOpen) {
           e.preventDefault();
           setup.confirmProcessDialogOpen = true;
         }
         break;
-      case 'Tab':  // Added Tab key handler
+      case 'Tab':
         e.preventDefault();
         if (e.shiftKey) {
           handlePrevPage();
@@ -446,15 +448,15 @@
     }
   };
 
-  const handleProcessPages = () => {
+ const handleProcessPages = () => {
     const newProcess: ProcessingPage = {
       id: uuidv4(),
-      pages: [...selectedPages],
+      pages: [...documentContext.selectedPages],
       status: 'pending',
       startTime: Date.now(),
     };
-    processingPages = [...processingPages, newProcess];
-    selectedPages.splice(0, selectedPages.length);
+    documentContext.processingPages = [...documentContext.processingPages, newProcess];
+    documentContext.selectedPages.splice(0, documentContext.selectedPages.length);
     let processPages: string[] = [];
     for (const pageNumber of newProcess.pages) {
       processPages.push(`${setup.dataPath}\\page-${pageNumber}.webp`);
@@ -467,38 +469,40 @@
         const newProcessedDocument: ProcessedDocument = {
           ...newProcess,
           file_name: res.file_name,
+          json_file_path: res.json_file_path, // Add this line
           debug: res,
           status: 'completed',
           endTime: Date.now(),
         };
         console.log("Starting new process:", newProcessedDocument);
-        processedDocuments = [...processedDocuments, newProcessedDocument];
-        processingPages = processingPages.filter(pp => pp.id !== newProcess.id);
+        documentContext.processedDocuments = [...documentContext.processedDocuments, newProcessedDocument];
+        documentContext.processingPages = documentContext.processingPages.filter(pp => pp.id !== newProcess.id);
       })
       .catch((err) => {
         console.error("Error in anthropic_pipeline:", err);
         const errorProcessedDocument: ProcessedDocument = {
           ...newProcess,
           file_name: '',
+          json_file_path: '', // Add this line
           debug: {} as FileNameGeneration,
           status: 'error',
           endTime: Date.now(),
           error: err.toString(),
         };
-        processedDocuments = [...processedDocuments, errorProcessedDocument];
-        processingPages = processingPages.filter(pp => pp.id !== newProcess.id);
+        documentContext.processedDocuments = [...documentContext.processedDocuments, errorProcessedDocument];
+        documentContext.processingPages = documentContext.processingPages.filter(pp => pp.id !== newProcess.id);
       });
 
     console.log('Páginas em processamento: ' + newProcess.pages);
   };
 
   const selectedPagesText = $derived.by(() => {
-    if (selectedPages.length === 1) {
-      return `Página ${selectedPages[0]} selecionada.`;
-    } else if (selectedPages.length === 2) {
-      return `Páginas ${selectedPages[0]} e ${selectedPages[1]} selecionadas.`;
+    if (documentContext.selectedPages.length === 1) {
+      return `Página ${documentContext.selectedPages[0]} selecionada.`;
+    } else if (documentContext.selectedPages.length === 2) {
+      return `Páginas ${documentContext.selectedPages[0]} e ${documentContext.selectedPages[1]} selecionadas.`;
     } else {
-      return `Páginas selecionadas: ${selectedPages.slice(0, -1).join(', ')} e ${selectedPages.slice(-1)}.`;
+      return `Páginas selecionadas: ${documentContext.selectedPages.slice(0, -1).join(', ')} e ${documentContext.selectedPages.slice(-1)}.`;
     }
   });
 
@@ -588,7 +592,7 @@
     loadDocument();
     return () => {
       setup.document?.destroy().then(() => {
-        selectedPages.splice(0, selectedPages.length);
+        documentContext.selectedPages.splice(0, documentContext.selectedPages.length);
         setup.metadata = undefined;
         setup.numPages = 0;
         setup.pageNumber = 1;
@@ -604,8 +608,8 @@
     if (!setup.document || !validPageNumber) return;
     setup.scale;
     setup.rotation;
-    processingPages.length;
-    selectedPages.length;
+    documentContext.processingPages.length;
+    documentContext.selectedPages.length;
     untrack(() => loadPageQueue(validPageNumber));
     console.log('Loading page...');
   });
@@ -640,11 +644,11 @@
     </div>
   </div>
 
-  {#if setup.numPages && selectedPages.length > 0}
+  {#if setup.numPages && documentContext.selectedPages.length > 0}
     <div
       class="absolute left-4 top-4 flex w-1/2 select-none flex-wrap gap-1 overflow-x-auto"
     >
-      {#each selectedPages as page}
+      {#each documentContext.selectedPages as page}
         <Button
           class="aspect-square h-8 w-8 font-semibold"
           size="sm"
@@ -761,8 +765,8 @@
       <Dialog.Trigger
         tabindex={-1}
         disabled={!setup.numPages ||
-          selectedPages.length === 0 ||
-          processingPages.some(pp => pp.pages.includes(setup.pageNumber))}
+          documentContext.selectedPages.length === 0 ||
+          documentContext.processingPages.some(pp => pp.pages.includes(setup.pageNumber))}
         class={buttonVariants({ size: 'icon', className: '' })}
         aria-label="Process selected pages"
       >
@@ -771,7 +775,7 @@
       <Dialog.Content class="sm:max-w-[425px]">
         <Dialog.Header>
           <Dialog.Title>
-            {selectedPages.length > 1
+            {documentContext.selectedPages.length > 1
               ? 'Processar as páginas selecionadas?'
               : 'Processar página selecionada?'}
           </Dialog.Title>
@@ -801,13 +805,13 @@
         handleSelectPage();
       }}
       disabled={!setup.numPages ||
-        processingPages.some(pp => pp.pages.includes(setup.pageNumber)) ||
-        processedDocuments.some(pp => pp.pages.includes(setup.pageNumber))}
-      aria-label={selectedPages.includes(setup.pageNumber)
+        documentContext.processingPages.some(pp => pp.pages.includes(setup.pageNumber)) ||
+        documentContext.processedDocuments.some(pp => pp.pages.includes(setup.pageNumber))}
+      aria-label={documentContext.selectedPages.includes(setup.pageNumber)
         ? 'Deselect page'
         : 'Select page'}
     >
-      {#if selectedPages.includes(setup.pageNumber)}
+      {#if documentContext.selectedPages.includes(setup.pageNumber)}
         <FileMinus />
       {:else}
         <FilePlus />

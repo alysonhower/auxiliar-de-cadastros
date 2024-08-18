@@ -1,6 +1,6 @@
 use base64::prelude::*;
 use dotenv::dotenv;
-use quick_xml::{Reader, Writer, de::from_str};
+use quick_xml::{de::from_str, Reader, Writer};
 use regex::Regex;
 use serde_json::json;
 use std::fs;
@@ -53,11 +53,17 @@ pub async fn anthropic_pipeline(paths: Vec<String>) -> Result<DocumentInfo, Stri
 
     let prompt = FILE_NAME_GENERATION_PROMPT.replace("{XML}", &xml_content);
     let response = process_xml(&client, &api_key, &prompt).await?;
-    let wrapped_xml = format!("<document>{}</document>", response);
+    let json_path_str = json_path.to_str().unwrap().to_string();
+    let wrapped_xml = format!(
+        "<document><json_file_path>{}</json_file_path>{}</document>",
+        json_path_str, response
+    );
 
     let json_content = xml_to_json(&wrapped_xml)?;
-    let document_info: DocumentInfo = serde_json::from_str(&json_content)
-        .map_err(|e| format!("Failed to parse JSON: {}", e))?;
+    let mut document_info: DocumentInfo =
+        serde_json::from_str(&json_content).map_err(|e| format!("Failed to parse JSON: {}", e))?;
+
+    document_info.json_file_path = json_path.to_str().unwrap().to_string();
 
     let serialized_json = serde_json::to_string(&document_info)
         .map_err(|e| format!("Failed to serialize JSON: {}", e))?;
@@ -75,8 +81,8 @@ fn extract_page_number(input: &str) -> &str {
 }
 
 fn read_existing_file(xml_path: &Path) -> Result<String, String> {
-    let mut file = File::open(xml_path)
-        .map_err(|e| format!("Failed to open existing file: {}", e))?;
+    let mut file =
+        File::open(xml_path).map_err(|e| format!("Failed to open existing file: {}", e))?;
     let mut content = String::new();
     file.read_to_string(&mut content)
         .map_err(|e| format!("Failed to read existing file: {}", e))?;
@@ -97,8 +103,8 @@ async fn process_images(
 }
 
 fn xml_to_json(xml: &str) -> Result<String, String> {
-    let document: DocumentInfo = from_str(xml)
-        .map_err(|e| format!("Failed to parse XML: {}", e))?;
+    let document: DocumentInfo =
+        from_str(xml).map_err(|e| format!("Failed to parse XML: {}", e))?;
     serde_json::to_string_pretty(&document)
         .map_err(|e| format!("Failed to serialize to JSON: {}", e))
 }
@@ -303,11 +309,10 @@ async fn process_xml(
 }
 
 fn read_json_file(json_path: &Path) -> Result<DocumentInfo, String> {
-    let json_content = fs::read_to_string(json_path)
-        .map_err(|e| format!("Failed to read JSON file: {}", e))?;
+    let json_content =
+        fs::read_to_string(json_path).map_err(|e| format!("Failed to read JSON file: {}", e))?;
 
-    serde_json::from_str(&json_content)
-        .map_err(|e| format!("Failed to parse JSON: {}", e))
+    serde_json::from_str(&json_content).map_err(|e| format!("Failed to parse JSON: {}", e))
 }
 
 fn save_json_file(json_content: &str, json_path: &Path) -> Result<(), String> {
@@ -315,9 +320,27 @@ fn save_json_file(json_content: &str, json_path: &Path) -> Result<(), String> {
         create_dir_all(parent).map_err(|e| format!("Failed to create directory: {}", e))?;
     }
 
-    fs::write(json_path, json_content)
-        .map_err(|e| format!("Failed to write JSON file: {}", e))?;
+    fs::write(json_path, json_content).map_err(|e| format!("Failed to write JSON file: {}", e))?;
 
     println!("JSON file saved at: {:?}", json_path);
     Ok(())
+}
+
+#[tauri::command]
+pub fn update_file_name(path: String, name: String) -> Result<DocumentInfo, String> {
+    let mut document_info: DocumentInfo = read_json_file(&Path::new(&path))?;
+    if document_info.file_name != name {
+        if document_info.file_name_history.is_empty() {
+            document_info.file_name_history.push(document_info.file_name.clone());
+        }
+        if !document_info.file_name_history.contains(&name) {
+            document_info.file_name_history.push(name.clone());
+        }
+        document_info.file_name = name;
+
+        let serialized_json = serde_json::to_string(&document_info)
+            .map_err(|e| format!("Failed to serialize JSON: {}", e))?;
+        save_json_file(&serialized_json, &Path::new(&path))?;
+    }
+    Ok(document_info)
 }

@@ -2,7 +2,6 @@ use base64::prelude::*;
 use dotenv::dotenv;
 use quick_xml::{Reader, Writer, de::from_str};
 use regex::Regex;
-use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::fs;
 use std::io::Cursor;
@@ -17,55 +16,8 @@ use tokio::time::{sleep, Duration};
 mod models;
 use models::*;
 
-mod constants;
-use constants::*;
-
-#[derive(Serialize, Deserialize)]
-pub struct DocumentInfo {
-    file_name: String,
-    reasoning: Reasoning,
-}
-
-#[derive(Serialize, Deserialize)]
-struct Reasoning {
-    document_summary: DocumentSummary,
-    document_type: DocumentType,
-    important_date: ImportantDate,
-    language: String,
-    main_entities: MainEntities,
-    type_abbreviation: TypeAbbreviation,
-}
-
-#[derive(Serialize, Deserialize)]
-struct DocumentSummary {
-    analysis: String,
-    formatting_process: String,
-    summary: String,
-}
-
-#[derive(Serialize, Deserialize)]
-struct DocumentType {
-    analysis: String,
-    type_name: String,
-}
-
-#[derive(Serialize, Deserialize)]
-struct ImportantDate {
-    analysis: String,
-    date: String,
-}
-
-#[derive(Serialize, Deserialize)]
-struct MainEntities {
-    analysis: String,
-    entities: String,
-}
-
-#[derive(Serialize, Deserialize)]
-struct TypeAbbreviation {
-    analysis: String,
-    type_abbr: String,
-}
+mod prompts;
+use prompts::*;
 
 #[tauri::command]
 pub async fn anthropic_pipeline(paths: Vec<String>) -> Result<DocumentInfo, String> {
@@ -104,12 +56,9 @@ pub async fn anthropic_pipeline(paths: Vec<String>) -> Result<DocumentInfo, Stri
     let wrapped_xml = format!("<document>{}</document>", response);
 
     let json_content = xml_to_json(&wrapped_xml)?;
-    
-    // Parse the JSON string into our DocumentInfo struct
     let document_info: DocumentInfo = serde_json::from_str(&json_content)
         .map_err(|e| format!("Failed to parse JSON: {}", e))?;
 
-    // Serialize the DocumentInfo struct to save it as a JSON file
     let serialized_json = serde_json::to_string(&document_info)
         .map_err(|e| format!("Failed to serialize JSON: {}", e))?;
 
@@ -148,9 +97,8 @@ async fn process_images(
 }
 
 fn xml_to_json(xml: &str) -> Result<String, String> {
-    let document: Document = from_str(xml)
+    let document: DocumentInfo = from_str(xml)
         .map_err(|e| format!("Failed to parse XML: {}", e))?;
-    
     serde_json::to_string_pretty(&document)
         .map_err(|e| format!("Failed to serialize to JSON: {}", e))
 }

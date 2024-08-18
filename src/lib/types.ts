@@ -28,12 +28,21 @@ export interface FileNameGeneration {
     };
   }
   
-  export interface ProcessedPage {
-    file_name: string;
+  export interface ProcessingPage {
+    id: string;
     pages: number[];
+    status: 'pending' | 'processing' | 'completed' | 'error';
+    startTime: number;
+    endTime?: number;
+    elapsed?: number;
+    error?: string;
+  }
+
+  export interface ProcessedDocument extends ProcessingPage {
+    file_name: string;
     debug: FileNameGeneration;
   }
-  
+
   export interface SetupState {
     path: string | undefined;
     dataPath: string | undefined;
@@ -47,6 +56,5 @@ export interface FileNameGeneration {
     pageNumPending: number | undefined;
     metadata: any | undefined;
     isActive: boolean;
-    isProcessing: boolean;
     confirmProcessDialogOpen: boolean;
   }

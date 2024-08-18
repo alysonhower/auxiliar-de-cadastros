@@ -122,11 +122,12 @@ In order to create the file name, follow these steps below:
     FORMATTING REQUIREMENTS:
     - MUST maximize relevant information density within 150 characters
     - MUST employ telegraphic style
-    - MUST use abbreviations, initialisms, and short forms extensively
+    - MUST use abbreviations, initialisms, and short forms for every single word extensively
     - MUST format as lowercase_text_separated_by_underlines_ascii_characters_only
+    - MUST NOT use any punctuation marks, accented characters or special characters
 
     Output your analysis within <document_summary> tags as follows:
-            
+
         <document_summary>
             <analysis>[Detailed explanation of extraction process and result]</analysis>
             <formatting_process>[Detailed explanation of formatting process]</formatting_process>
@@ -149,7 +150,7 @@ In order to create the file name, follow these steps below:
     - [doc_purp] is the purpose from step 6
 
     Finally, provide the file name (without file extension) within <file_name> tags:
-                
+
         <file_name>[The generated file name]</file_name>
 </step>
 

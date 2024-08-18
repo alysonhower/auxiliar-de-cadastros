@@ -40,13 +40,13 @@ pub struct OutputError {
     pub message: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Document {
+#[derive(Serialize, Deserialize)]
+pub struct DocumentInfo {
     pub file_name: String,
     pub reasoning: Reasoning,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize)]
 pub struct Reasoning {
     pub document_summary: DocumentSummary,
     pub document_type: DocumentType,
@@ -56,32 +56,32 @@ pub struct Reasoning {
     pub type_abbreviation: TypeAbbreviation,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize)]
 pub struct DocumentSummary {
     pub analysis: String,
     pub formatting_process: String,
     pub summary: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize)]
 pub struct DocumentType {
     pub analysis: String,
     pub type_name: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize)]
 pub struct ImportantDate {
     pub analysis: String,
     pub date: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize)]
 pub struct MainEntities {
     pub analysis: String,
     pub entities: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize)]
 pub struct TypeAbbreviation {
     pub analysis: String,
     pub type_abbr: String,

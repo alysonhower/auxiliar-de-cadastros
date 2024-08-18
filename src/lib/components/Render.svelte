@@ -31,7 +31,8 @@
   import { open } from '@tauri-apps/plugin-dialog';
   import type { TextContent, TextItem } from 'pdfjs-dist/types/src/display/api';
   import { invoke } from '@tauri-apps/api/core';
-    import type { ProcessedPage, SetupState, FileNameGeneration } from '$lib/types';
+  import type { ProcessingPage, ProcessedDocument, SetupState, FileNameGeneration } from '$lib/types';
+  import { v4 as uuidv4 } from 'uuid';
 
   // Constants
   const MIN_SCALE = 0.4;
@@ -45,7 +46,7 @@
     import.meta.url,
   ).toString();
 
-  let { selectedPages = $bindable(), processingPages = $bindable(), processedPages = $bindable() }: { selectedPages: number[]; processingPages: number[]; processedPages: ProcessedPage[] } = $props();
+  let { selectedPages = $bindable(), processingPages = $bindable(), processedDocuments = $bindable() }: { selectedPages: number[]; processingPages: ProcessingPage[]; processedDocuments: ProcessedDocument[] } = $props();
 
   let component: HTMLDivElement;
   let canvasContainer: HTMLDivElement;
@@ -66,7 +67,6 @@
     pageNumPending: undefined,
     metadata: undefined,
     isActive: false,
-    isProcessing: false,
     confirmProcessDialogOpen: false,
   });
 
@@ -128,12 +128,12 @@
     let textColor: string;
     let borderColor: string;
 
-    if (processedPages.some(pp => pp.pages.includes(pageNumber))) {
+    if (processedDocuments.some(pp => pp.pages.includes(pageNumber))) {
       text = `Página ${pageNumber} processada`;
       bgColor = 'rgba(186, 79, 125, 0.2)';
       textColor = 'rgba(156, 49, 95, 1)';
       borderColor = 'rgba(186, 79, 125, 1)';
-    } else if (processingPages.includes(pageNumber)) {
+    } else if (processingPages.some(pp => pp.pages.includes(pageNumber))) {
       text = `Página ${pageNumber} em processamento...`;
       bgColor = 'rgba(255, 223, 186, 0.5)';
       textColor = 'rgba(186, 79, 25, 1)';
@@ -271,8 +271,8 @@
 
   const handleSelectPage = () => {
     if (
-      processingPages.includes(validPageNumber) ||
-      processedPages.some(pp => pp.pages.includes(validPageNumber))
+      processingPages.some(pp => pp.pages.includes(validPageNumber)) ||
+      processedDocuments.some(pp => pp.pages.includes(validPageNumber))
     )
       return;
     const pageNumber = validPageNumber;
@@ -300,14 +300,14 @@
         .find(
           (page) =>
             page < pageNumber &&
-            !processingPages.includes(page) &&
-            !processedPages.some(pp => pp.pages.includes(page)),
+            !processingPages.some(pp => pp.pages.includes(page)) &&
+            !processedDocuments.some(pp => pp.pages.includes(page)),
         );
       const nextSelectedPage = selectedPages.find(
         (page) =>
           page > pageNumber &&
-          !processingPages.includes(page) &&
-          !processedPages.some(pp => pp.pages.includes(page)),
+          !processingPages.some(pp => pp.pages.includes(page)) &&
+          !processedDocuments.some(pp => pp.pages.includes(page)),
       );
       setup.pageNumber = prevSelectedPage || nextSelectedPage || pageNumber;
     } else {
@@ -321,8 +321,8 @@
           (page) =>
             page < pageNumber &&
             !selectedPages.includes(page) &&
-            !processingPages.includes(page) &&
-            !processedPages.some(pp => pp.pages.includes(page))
+            !processingPages.some(pp => pp.pages.includes(page)) &&
+            !processedDocuments.some(pp => pp.pages.includes(page))
         );
       const nextUnselectedPage = Array.from(
         { length: setup.numPages },
@@ -331,8 +331,8 @@
         (page) =>
           page > pageNumber &&
           !selectedPages.includes(page) &&
-          !processingPages.includes(page) &&
-          !processedPages.some(pp => pp.pages.includes(page))
+          !processingPages.some(pp => pp.pages.includes(page)) &&
+          !processedDocuments.some(pp => pp.pages.includes(page))
       );
       setup.pageNumber = prevUnselectedPage || nextUnselectedPage || pageNumber;
     }
@@ -447,34 +447,49 @@
   };
 
   const handleProcessPages = () => {
-    if (setup.isProcessing) return;
-    setup.isProcessing = true;
-    processingPages.push(...selectedPages);
+    const newProcess: ProcessingPage = {
+      id: uuidv4(),
+      pages: [...selectedPages],
+      status: 'pending',
+      startTime: Date.now(),
+    };
+    processingPages = [...processingPages, newProcess];
+    selectedPages.splice(0, selectedPages.length);
     let processPages: string[] = [];
-    for (const pageNumber of processingPages) {
+    for (const pageNumber of newProcess.pages) {
       processPages.push(`${setup.dataPath}\\page-${pageNumber}.webp`);
     }
+    newProcess.status = 'processing';
     invoke<FileNameGeneration>('anthropic_pipeline', {
       paths: processPages,
     })
       .then((res) => {
-        const newProcessedPages: ProcessedPage = {
+        const newProcessedDocument: ProcessedDocument = {
+          ...newProcess,
           file_name: res.file_name,
-          pages: [...processingPages],
-          debug: res
+          debug: res,
+          status: 'completed',
+          endTime: Date.now(),
         };
-        console.log("New processed pages:", newProcessedPages);
-        processedPages.push(newProcessedPages);
-        processingPages.splice(0, processingPages.length);
-        setup.isProcessing = false;
+        console.log("Starting new process:", newProcessedDocument);
+        processedDocuments = [...processedDocuments, newProcessedDocument];
+        processingPages = processingPages.filter(pp => pp.id !== newProcess.id);
       })
       .catch((err) => {
         console.error("Error in anthropic_pipeline:", err);
-        setup.isProcessing = false;
+        const errorProcessedDocument: ProcessedDocument = {
+          ...newProcess,
+          file_name: '',
+          debug: {} as FileNameGeneration,
+          status: 'error',
+          endTime: Date.now(),
+          error: err.toString(),
+        };
+        processedDocuments = [...processedDocuments, errorProcessedDocument];
+        processingPages = processingPages.filter(pp => pp.id !== newProcess.id);
       });
 
-    selectedPages.splice(0, selectedPages.length);
-    console.log('Páginas processadas: ' + processingPages);
+    console.log('Páginas em processamento: ' + newProcess.pages);
   };
 
   const selectedPagesText = $derived.by(() => {
@@ -747,7 +762,7 @@
         tabindex={-1}
         disabled={!setup.numPages ||
           selectedPages.length === 0 ||
-          processingPages.includes(setup.pageNumber)}
+          processingPages.some(pp => pp.pages.includes(setup.pageNumber))}
         class={buttonVariants({ size: 'icon', className: '' })}
         aria-label="Process selected pages"
       >
@@ -786,8 +801,8 @@
         handleSelectPage();
       }}
       disabled={!setup.numPages ||
-        processingPages.includes(setup.pageNumber) ||
-        processedPages.some(pp => pp.pages.includes(setup.pageNumber))}
+        processingPages.some(pp => pp.pages.includes(setup.pageNumber)) ||
+        processedDocuments.some(pp => pp.pages.includes(setup.pageNumber))}
       aria-label={selectedPages.includes(setup.pageNumber)
         ? 'Deselect page'
         : 'Select page'}

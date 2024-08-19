@@ -789,7 +789,6 @@
               handleProcessPages();
               setup.confirmProcessDialogOpen = false;
             }}
-            autofocus
           >
             Processar
           </Button>

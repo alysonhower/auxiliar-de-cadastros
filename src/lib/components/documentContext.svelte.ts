@@ -6,7 +6,7 @@ export type DocumentState = {
   processedDocuments: ProcessedDocument[];
 };
 
-export default function createDocumentState(): DocumentState {
+export function createDocumentState(): DocumentState {
   let selectedPages = $state<number[]>([]);
   let processingPages = $state<ProcessingPage[]>([]);
   let processedDocuments = $state<ProcessedDocument[]>([]);

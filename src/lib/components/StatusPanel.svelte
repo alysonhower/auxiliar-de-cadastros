@@ -7,46 +7,81 @@ import { Button } from "$lib/components/ui/button";
 import * as Card from "$lib/components/ui/card";
 import * as Collapsible from "$lib/components/ui/collapsible";
 import * as DropdownMenu from "$lib/components/ui/dropdown-menu";
-import { Input } from "$lib/components/ui/input";
+import { Separator } from "$lib/components/ui/separator";
 
 import type { FileNameGeneration, ProcessedDocument } from "$lib/types";
 import type { DocumentState } from "./documentContext.svelte";
 
 const documentContext: DocumentState = getContext("documentContext");
 
-const formatPages = (pages: number[]): string => {
+const formatPagesText = (pages: number[]): string => {
   if (pages.length === 1) return pages[0].toString();
   if (pages.length === 2) return `${pages[0]} e ${pages[1]}`;
   return `${pages.slice(0, -1).join(", ")} e ${pages[pages.length - 1]}`;
 };
 
-const formatDuration = (startTime: number, endTime?: number): string => {
+const formatDurationText = (startTime: number, endTime?: number): string => {
   const duration = (endTime || Date.now()) - startTime;
   const seconds = Math.floor(duration / 1000);
   const minutes = Math.floor(seconds / 60);
   return minutes > 0 ? `${minutes}m ${seconds % 60}s` : `${seconds}s`;
 };
 
-const translateStatus = (status: string) => {
-  if (status === "pending") return "pendente";
-  if (status === "processing") return "processando";
-  if (status === "completed") return "concluído";
-  if (status === "error") return "erro";
-  return "desconhecido";
+const translateStatusText = (status: string): string => {
+  const statusMap = {
+    pending: "pendente",
+    processing: "processando",
+    completed: "concluído",
+    error: "erro"
+  } as const;
+  return statusMap[status as keyof typeof statusMap] || "desconhecido";
 };
 
-let editingDocumentId: string | null = $state(null);
-let editedFileName: string = $state("");
+let time = $state(new Date());
+let editingDocumentId = $state<string | undefined>(undefined);
+let editedFileName = $state("");
+let showHistoryMap = $state(new Map<string, boolean>());
+let isDropdownOpenMap = $state(new Map<string, boolean>());
+let historyHoverTimeoutMap = $state(new Map<string, NodeJS.Timeout>());
 
-function startEditing(document: ProcessedDocument) {
+const setMapValue = (map: Map<string, any>, id: string, value: any) => {
+  return new Map(map).set(id, value);
+};
+
+const handleHistoryInteraction = (id: string, isEnter: boolean) => {
+  clearTimeout(historyHoverTimeoutMap.get(id));
+  if (isEnter) {
+    showHistoryMap = setMapValue(showHistoryMap, id, true);
+    isDropdownOpenMap = setMapValue(isDropdownOpenMap, id, true);
+  } else {
+    const timeout = setTimeout(() => {
+      showHistoryMap = setMapValue(showHistoryMap, id, false);
+      isDropdownOpenMap = setMapValue(isDropdownOpenMap, id, false);
+    }, 300);
+    historyHoverTimeoutMap = setMapValue(historyHoverTimeoutMap, id, timeout);
+  }
+};
+
+const handleEditButtonInteraction = (id: string, isEnter: boolean) => {
+  if (isEnter) {
+    showHistoryMap = setMapValue(showHistoryMap, id, true);
+  } else {
+    const timeout = setTimeout(() => {
+      if (!isDropdownOpenMap.get(id)) {
+        showHistoryMap = setMapValue(showHistoryMap, id, false);
+      }
+    }, 300);
+    historyHoverTimeoutMap = setMapValue(historyHoverTimeoutMap, id, timeout);
+  }
+};
+
+const startEditing = (document: ProcessedDocument) => {
   editingDocumentId = document.id;
   editedFileName = document.file_name;
-}
+};
 
-async function saveFileName(document: ProcessedDocument) {
-  if (!editedFileName.trim()) {
-    return;
-  }
+const saveFileName = async (document: ProcessedDocument) => {
+  if (!editedFileName.trim()) return;
 
   try {
     const updatedDocumentInfo = await invoke("update_file_name", {
@@ -55,25 +90,23 @@ async function saveFileName(document: ProcessedDocument) {
     });
     document.file_name = editedFileName;
     document.debug = updatedDocumentInfo as FileNameGeneration;
+    showHistoryMap = setMapValue(showHistoryMap, document.id, false);
   } catch (error) {
     console.error("Error updating file name:", error);
   } finally {
-    editingDocumentId = null;
+    editingDocumentId = undefined;
   }
-}
+};
 
-function cancelEditing() {
-  editingDocumentId = null;
+const cancelEditing = () => {
+  editingDocumentId = undefined;
   editedFileName = "";
-}
+};
 
-async function handleKeyDown(event: KeyboardEvent, document: ProcessedDocument) {
-  if (event.key === 'Enter') {
-    await saveFileName(document);
-  } else if (event.key === 'Escape') {
-    cancelEditing();
-  }
-}
+const handleKeyDown = async (event: KeyboardEvent, document: ProcessedDocument) => {
+  if (event.key === 'Enter') await saveFileName(document);
+  else if (event.key === 'Escape') cancelEditing();
+};
 
 const elapsedTimes = $derived.by(() => {
   let times = [];
@@ -81,22 +114,16 @@ const elapsedTimes = $derived.by(() => {
     page.elapsed = time.getTime() - page.startTime;
     times.push({
       id: page.id,
-      elapsed: formatDuration(page.startTime),
+      elapsed: formatDurationText(page.startTime),
     });
   }
   return times;
 });
 
-let time = $state(new Date());
 
 $effect(() => {
-  const interval = setInterval(() => {
-    time = new Date();
-  }, 1000);
-
-  return () => {
-    clearInterval(interval);
-  };
+  const interval = setInterval(() => time = new Date(), 1000);
+  return () => clearInterval(interval);
 });
 
 $effect(() => {
@@ -105,128 +132,166 @@ $effect(() => {
 });
 </script>
 
-<div class="flex h-full w-full flex-col justify-between bg-accent p-4">
-  <h1 class="text-2xl font-semibold text-primary mb-4">Status do processamento</h1>
-  <div class="flex h-full w-full flex-col gap-4 overflow-y-auto">
+<div class="flex h-full w-full flex-col overflow-y-auto justify-between bg-accent p-4">
+  <h1 class="text-base font-semibold text-primary mb-4 break-all">Status do processamento</h1>
+  <div class="flex h-full w-full flex-col gap-4">
     {#each documentContext.processingPages as processingPage}
-      <Card.Root>
-        <Card.Header>
-          <Card.Title>
+      <Card.Root class="p-3 max-h-[50vh] flex flex-col">
+        <Card.Header class="pb-1 flex-shrink-0">
+          <Card.Title class="text-sm">
             <span class="font-semibold text-primary break-all">
-              Processando ({processingPage.pages.length > 1 ? "páginas" : "página"}: {formatPages(processingPage.pages)})
+              Processando ({processingPage.pages.length > 1 ? "páginas" : "página"}: {formatPagesText(processingPage.pages)})
             </span>
           </Card.Title>
         </Card.Header>
-        <Card.Content class="space-y-2">
-          <p>Status: {translateStatus(processingPage.status)}</p>
+        <Separator class="mt-1.5 bg-secondary mb-3 flex-shrink-0" />
+        <Card.Content class="space-y-1 text-xs overflow-y-auto">
+          <p><span class="font-semibold text-primary">Status:</span> {translateStatusText(processingPage.status)}</p>
           <p>
-            Tempo decorrido: {#key time}<span>{elapsedTimes.find((t) => t.id === processingPage.id)?.elapsed}</span>{/key}
+            <span class="font-semibold text-primary">Tempo decorrido:</span>
+            {#key time}<span>{elapsedTimes.find((t) => t.id === processingPage.id)?.elapsed}</span>{/key}
           </p>
-          <p>ID: {processingPage.id}</p>
-          <p>Início: {new Date(processingPage.startTime).toLocaleString()}</p>
+          <p><span class="font-semibold text-primary">Início:</span> {new Date(processingPage.startTime).toLocaleString()}</p>
           {#if processingPage.error}
-            <p class="text-red-500">Erro: {processingPage.error}</p>
+            <p class="text-red-500"><span class="font-semibold">Erro:</span> {processingPage.error}</p>
           {/if}
         </Card.Content>
       </Card.Root>
     {/each}
 
     {#each documentContext.processedDocuments as processedDocument}
-      <Card.Root>
-        <Card.Header>
-          <Card.Title class="flex flex-col gap-2">
+      <Card.Root class="p-3 max-h-[50vh] flex flex-col">
+        <Card.Header class="pb-1 flex-shrink-0">
+          <Card.Title class="flex flex-col gap-1 text-sm">
             <span class="font-semibold text-primary break-all">
-              {processedDocument.file_name.length > 0 ? "Nome sugerido" : "Não foi possível sugerir um nome"}
-              ({processedDocument.pages.length > 1 ? "páginas" : "página"}: {formatPages(processedDocument.pages)}):
+              Nome sugerido (página: {formatPagesText(processedDocument.pages)}):
             </span>
-            <div class="flex items-center w-full mt-2">
-              {#if editingDocumentId === processedDocument.id}
-                <form class="flex items-center space-x-2 w-full">
-                  <div class="flex-grow min-w-0">
-                    <Input
-                      class="font-semibold text-xl w-full"
-                      bind:value={editedFileName}
-                      type="text"
-                      placeholder="Coloque o nome do arquivo"
-                      onkeydown={(e) => handleKeyDown(e, processedDocument)}
-                      autofocus
-                    />
-                  </div>
-                  <div class="flex-shrink-0 flex items-center space-x-2">
-                    <Button
-                      size="icon"
-                      variant="default"
-                      onclick={() => saveFileName(processedDocument)}
-                      disabled={!editedFileName.trim()}
-                    >
-                      <Check class="h-4 w-4" />
-                    </Button>
-                    <Button
-                      size="icon"
-                      variant="default"
-                      onclick={cancelEditing}
-                    >
-                      <X class="h-4 w-4" />
-                    </Button>
-                  </div>
-                </form>
-              {:else}
-                <span class="break-all flex-grow mr-2 font-semibold text-xl">
-                  {processedDocument.file_name || "Talvez tenha acontecido um erro, verifique as informações geradas logo abaixo"}
-                </span>
-                <div class="flex-shrink-0 flex items-center">
+            {#if editingDocumentId === processedDocument.id}
+              <div class="w-full h-full space-y-1">
+                <!-- svelte-ignore a11y_autofocus -->
+                <div
+                  class="w-full p-2 border rounded-md font-semibold text-sm focus:outline-none focus:ring-1 focus:ring-primary break-all min-h-[1.5em] max-h-[50vh] overflow-y-auto"
+                  contenteditable="true"
+                  bind:textContent={editedFileName}
+                  onkeydown={(e) => handleKeyDown(e, processedDocument)}
+                  onfocus={(e) => {
+                    if (e.target instanceof Node) {
+                      const range = document.createRange();
+                      range.selectNodeContents(e.target);
+                      const selection = window.getSelection();
+                      selection?.removeAllRanges();
+                      selection?.addRange(range);
+                    }
+                  }}
+                  role="textbox"
+                  tabindex="0"
+                  autofocus
+                ></div>
+                <div class="flex justify-end space-x-1">
                   <Button
                     size="icon"
                     variant="default"
-                    class="mr-2"
-                    onclick={() => startEditing(processedDocument)}
+                    onclick={() => saveFileName(processedDocument)}
+                    disabled={!editedFileName.trim()}
+                    class="h-7 w-7"
                   >
-                    <Pencil class="h-4 w-4" />
+                    <Check class="h-3.5 w-3.5" />
                   </Button>
-                  {#if processedDocument.debug?.file_name_history && processedDocument.debug.file_name_history.length > 1}
-                    <DropdownMenu.Root>
-                      <DropdownMenu.Trigger asChild let:builder>
-                        <Button
-                          size="icon"
-                          variant="default"
-                          builders={[builder]}
-                        >
-                          <History class="h-4 w-4" />
-                        </Button>
-                      </DropdownMenu.Trigger>
-                      <DropdownMenu.Content class="w-96 max-w-[90vw]">
-                        <DropdownMenu.Label>Histórico de nomes</DropdownMenu.Label>
-                        <DropdownMenu.Separator />
-                        {#each processedDocument.debug.file_name_history.slice().reverse() as historyItem, index}
-                          <DropdownMenu.Item
-                            onclick={() => {
-                              editedFileName = historyItem;
-                              saveFileName(processedDocument);
-                            }}
-                            class="break-all cursor-pointer"
-                          >
-                            {historyItem} {index === 0 ? '(atual)' : ''}
-                          </DropdownMenu.Item>
-                        {/each}
-                      </DropdownMenu.Content>
-                    </DropdownMenu.Root>
-                  {/if}
+                  <Button
+                    size="icon"
+                    variant="default"
+                    onclick={cancelEditing}
+                    class="h-7 w-7"
+                  >
+                    <X class="h-3.5 w-3.5" />
+                  </Button>
                 </div>
-              {/if}
-            </div>
+              </div>
+            {:else}
+              <span class="break-all w-full font-semibold text-sm mb-1">
+                {processedDocument.file_name || "Talvez tenha acontecido um erro, verifique as informações geradas logo abaixo"}
+              </span>
+              <div class="flex justify-end space-x-1 relative">
+                <div class="relative">
+                  {#if processedDocument.debug?.file_name_history && processedDocument.debug.file_name_history.length > 1}
+                    <!-- svelte-ignore a11y_no_static_element_interactions -->
+                    <div
+                      class="absolute right-full transition-all duration-300 ease-in-out transform"
+                      class:translate-x-[100%]={!showHistoryMap.get(processedDocument.id)}
+                      class:opacity-0={!showHistoryMap.get(processedDocument.id)}
+                      class:pointer-events-none={!showHistoryMap.get(processedDocument.id)}
+                      onmouseenter={() => handleHistoryInteraction(processedDocument.id, true)}
+                      onmouseleave={() => handleHistoryInteraction(processedDocument.id, false)}
+                    >
+                      <DropdownMenu.Root open={isDropdownOpenMap.get(processedDocument.id)}>
+                        <DropdownMenu.Trigger asChild let:builder>
+                          <Button
+                            size="icon"
+                            variant="default"
+                            builders={[builder]}
+                            class="h-7 w-7 mr-1"
+                          >
+                            <History class="h-3.5 w-3.5" />
+                          </Button>
+                        </DropdownMenu.Trigger>
+                        <DropdownMenu.Content
+                          class="w-96 max-w-[90vw] max-h-60 overflow-hidden flex flex-col"
+                          onmouseenter={() => handleHistoryInteraction(processedDocument.id, true)}
+                          onmouseleave={() => handleHistoryInteraction(processedDocument.id, false)}
+                        >
+                          <div class="sticky top-0 bg-background z-10 py-1.5 px-2">
+                            <DropdownMenu.Label>Histórico de nomes</DropdownMenu.Label>
+                            <DropdownMenu.Separator />
+                          </div>
+                          <div class="overflow-y-auto">
+                            {#each processedDocument.debug.file_name_history.slice() as historyItem}
+                              <DropdownMenu.Item
+                                onclick={() => {
+                                  editedFileName = historyItem;
+                                  saveFileName(processedDocument);
+                                  isDropdownOpenMap = setMapValue(isDropdownOpenMap, processedDocument.id, false);
+                                }}
+                                class="break-all cursor-pointer"
+                              >
+                                {historyItem} {historyItem === processedDocument.file_name ? '(nome atual)' : ''}
+                              </DropdownMenu.Item>
+                            {/each}
+                          </div>
+                        </DropdownMenu.Content>
+                      </DropdownMenu.Root>
+                    </div>
+                  {/if}
+                  <Button
+                    size="icon"
+                    variant="default"
+                    onclick={() => startEditing(processedDocument)}
+                    class="h-7 w-7 relative z-10"
+                    onmouseenter={() => handleEditButtonInteraction(processedDocument.id, true)}
+                    onmouseleave={() => handleEditButtonInteraction(processedDocument.id, false)}
+                  >
+                    <Pencil class="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+              </div>
+            {/if}
           </Card.Title>
         </Card.Header>
-        <Card.Content class="space-y-2">
-          <p><span class="font-semibold text-primary">Status:</span> {translateStatus(processedDocument.status)}</p>
+        <Separator class="mt-1.5 bg-secondary mb-3 flex-shrink-0" />
+        <Card.Content class="space-y-1 text-xs overflow-y-auto">
+          <p><span class="font-semibold text-primary">Status:</span> {translateStatusText(processedDocument.status)}</p>
           <p>
             <span class="font-semibold text-primary">Tempo de processamento:</span>
-            {formatDuration(processedDocument.startTime, processedDocument.endTime)}
+            {formatDurationText(processedDocument.startTime, processedDocument.endTime)}
           </p>
           <Collapsible.Root>
-            <Collapsible.Trigger>
-              <Button variant="secondary" size="icon" class="mt-2"><Ellipsis /></Button>
-            </Collapsible.Trigger>
-            <Collapsible.Content class="mt-2 space-y-2">
+            <div class="sticky top-0">
+              <Collapsible.Trigger>
+                <Button variant="secondary" size="icon" class="h-6 w-6 mt-1">
+                  <Ellipsis class="h-3 w-3" />
+                </Button>
+              </Collapsible.Trigger>
+            </div>
+            <Collapsible.Content class="mt-1.5 space-y-1">
               <p><span class="font-semibold text-primary">ID:</span> {processedDocument.id}</p>
               <p><span class="font-semibold text-primary">Início:</span> {new Date(processedDocument.startTime).toLocaleString()}</p>
               <p><span class="font-semibold text-primary">Fim:</span> {new Date(processedDocument.endTime!).toLocaleString()}</p>
@@ -234,7 +299,7 @@ $effect(() => {
                 <p class="text-red-500"><span class="font-semibold">Erro:</span> {processedDocument.error}</p>
               {/if}
               <p class="font-semibold text-primary">Debug:</p>
-              <pre class="text-wrap w-full max-w-full overflow-x-auto whitespace-pre-wrap break-words">
+              <pre class="text-wrap w-full max-w-full overflow-x-auto whitespace-pre-wrap break-words text-[10px]">
                 {JSON.stringify(processedDocument.debug, null, 2)}
               </pre>
             </Collapsible.Content>

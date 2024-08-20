@@ -13,7 +13,7 @@ use std::{
 use tauri_plugin_http::reqwest;
 use tokio::time::{sleep, Duration};
 
-mod models;
+pub mod models;
 use models::*;
 
 mod prompts;
@@ -55,8 +55,8 @@ pub async fn anthropic_pipeline(paths: Vec<String>) -> Result<DocumentInfo, Stri
     let response = process_xml(&client, &api_key, &prompt).await?;
     let json_path_str = json_path.to_str().unwrap().to_string();
     let wrapped_xml = format!(
-        "<document><json_file_path>{}</json_file_path>{}</document>",
-        json_path_str, response
+        "<document><json_file_path>{}</json_file_path><pages_paths>{}</pages_paths>{}</document>",
+        json_path_str, paths.join(","), response
     );
 
     let json_content = xml_to_json(&wrapped_xml)?;

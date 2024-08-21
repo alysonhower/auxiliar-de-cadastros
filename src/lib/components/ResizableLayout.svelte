@@ -1,14 +1,11 @@
 <script lang="ts">
   import * as Resizable from "$lib/components/ui/resizable";
-  import {
-    createDocumentState,
-    type DocumentContext,
-  } from "./documentContext.svelte";
+  import { createDocumentState } from "./documentContext.svelte";
   import Render from "./Render.svelte";
   import StatusPanel from "./StatusPanel.svelte";
   import { setContext } from "svelte";
 
-  const documentContext: DocumentContext = createDocumentState();
+  const documentContext = createDocumentState();
   setContext("documentContext", documentContext);
 </script>
 

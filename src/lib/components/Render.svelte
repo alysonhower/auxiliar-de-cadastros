@@ -19,6 +19,9 @@
     FilePlus,
     FileMinus,
     FileCheck,
+    Eye,
+    EyeOff,
+    Loader2,
   } from "lucide-svelte/icons";
   import { homeDir, resolve } from "@tauri-apps/api/path";
   import {
@@ -33,7 +36,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import type {
     SetupState,
-    FileNameGeneration,
+    DocumentInfo,
     ProcessingPage,
     ProcessedDocument,
   } from "$lib/types";
@@ -72,6 +75,8 @@
     metadata: undefined,
     isActive: false,
     confirmProcessDialogOpen: false,
+    showStatusCanvas: true,
+    isExtractingImages: false,
   });
 
   const loadDocument = async () => {
@@ -133,6 +138,15 @@
     let borderColor: string;
 
     if (
+      documentContext.finishedDocuments.some((fd) =>
+        fd.pages.includes(pageNumber),
+      )
+    ) {
+      text = `Página ${pageNumber} finalizada`;
+      bgColor = "rgba(0, 128, 0, 0.2)";
+      textColor = "rgba(0, 100, 0, 1)";
+      borderColor = "rgba(0, 128, 0, 1)";
+    } else if (
       documentContext.processedDocuments.some((pp) =>
         pp.pages.includes(pageNumber),
       )
@@ -288,6 +302,9 @@
       ) ||
       documentContext.processedDocuments.some((pp) =>
         pp.pages.includes(validPageNumber),
+      ) ||
+      documentContext.finishedDocuments.some((pp) =>
+        pp.pages.includes(validPageNumber),
       )
     )
       return;
@@ -322,6 +339,9 @@
             ) &&
             !documentContext.processedDocuments.some((pp) =>
               pp.pages.includes(page),
+            ) &&
+            !documentContext.finishedDocuments.some((pp) =>
+              pp.pages.includes(page),
             ),
         );
       const nextSelectedPage = documentContext.selectedPages.find(
@@ -331,6 +351,9 @@
             pp.pages.includes(page),
           ) &&
           !documentContext.processedDocuments.some((pp) =>
+            pp.pages.includes(page),
+          ) &&
+          !documentContext.finishedDocuments.some((pp) =>
             pp.pages.includes(page),
           ),
       );
@@ -351,6 +374,9 @@
             ) &&
             !documentContext.processedDocuments.some((pp) =>
               pp.pages.includes(page),
+            ) &&
+            !documentContext.finishedDocuments.some((pp) =>
+              pp.pages.includes(page),
             ),
         );
       const nextUnselectedPage = Array.from(
@@ -364,6 +390,9 @@
             pp.pages.includes(page),
           ) &&
           !documentContext.processedDocuments.some((pp) =>
+            pp.pages.includes(page),
+          ) &&
+          !documentContext.finishedDocuments.some((pp) =>
             pp.pages.includes(page),
           ),
       );
@@ -408,7 +437,9 @@
 
     if (e.key === "Escape") {
       e.preventDefault();
-      handleSelectPDF();
+      if (setup.confirmProcessDialogOpen) {
+        setup.confirmProcessDialogOpen = false;
+      }
       return;
     }
 
@@ -454,6 +485,11 @@
         break;
     }
 
+    if (e.ctrlKey && (e.key === "o" || e.key === "O")) {
+      e.preventDefault();
+      handleSelectPDF();
+    }
+
     if (e.ctrlKey) {
       switch (e.key) {
         case "=":
@@ -484,10 +520,15 @@
   };
 
   const handleProcessPages = () => {
+    let pagesToProcess: string[] = [];
+    for (const pageNumber of documentContext.selectedPages) {
+      pagesToProcess.push(`${setup.dataPath}\\page-${pageNumber}.webp`);
+    }
     const newProcess: ProcessingPage = {
       id: uuidv4(),
       pages: [...documentContext.selectedPages],
-      status: "pending",
+      pages_paths: pagesToProcess,
+      status: "processing",
       startTime: Date.now(),
     };
     documentContext.processingPages = [
@@ -498,24 +539,20 @@
       0,
       documentContext.selectedPages.length,
     );
-    let processPages: string[] = [];
-    for (const pageNumber of newProcess.pages) {
-      processPages.push(`${setup.dataPath}\\page-${pageNumber}.webp`);
-    }
-    newProcess.status = "processing";
-    invoke<FileNameGeneration>("anthropic_pipeline", {
-      paths: processPages,
+    invoke<DocumentInfo>("anthropic_pipeline", {
+      paths: pagesToProcess,
     })
       .then((res) => {
         const newProcessedDocument: ProcessedDocument = {
           ...newProcess,
           file_name: res.file_name,
-          json_file_path: res.json_file_path, // Add this line
-          debug: res,
+          json_file_path: res.json_file_path,
+          info: {
+            ...res,
+          },
           status: "completed",
           endTime: Date.now(),
         };
-        console.log("Starting new process:", newProcessedDocument);
         documentContext.processedDocuments = [
           ...documentContext.processedDocuments,
           newProcessedDocument,
@@ -530,8 +567,8 @@
         const errorProcessedDocument: ProcessedDocument = {
           ...newProcess,
           file_name: "",
-          json_file_path: "", // Add this line
-          debug: {} as FileNameGeneration,
+          json_file_path: "",
+          info: {} as DocumentInfo,
           status: "error",
           endTime: Date.now(),
           error: err.toString(),
@@ -569,11 +606,14 @@
       const webpFiles = files.filter((file) => file.name.endsWith(".webp"));
       if (webpFiles.length === setup.numPages) {
         console.log("Number of .webp files matches numPages");
-      } else {
+      } else if (webpFiles.length > 0 && webpFiles.length !== setup.numPages) {
         console.log(
           `Mismatch: ${webpFiles.length} .webp files found, expected ${setup.numPages}`,
         );
         await clearDataFolder(dataPath, files);
+        await extractImages(dataPath);
+      } else if (webpFiles.length === 0) {
+        console.log("No .webp files found. Extracting images...");
         await extractImages(dataPath);
       }
       setup.pageNumber = 1;
@@ -601,11 +641,14 @@
 
   async function extractImages(dataPath: string) {
     try {
+      setup.isExtractingImages = true;
       const path = await resolve(dataPath, "page-%d.webp");
       await extractPDFImages(setup.path!, path);
       console.log("Images extracted successfully");
     } catch (error) {
       handleError("Error extracting images:", error);
+    } finally {
+      setup.isExtractingImages = false;
     }
   }
 
@@ -638,36 +681,49 @@
       });
   });
 
-  // Load document
+  function cleanup() {
+    setup.document?.destroy().then(() => {
+      documentContext.selectedPages = [];
+      documentContext.processingPages = [];
+      documentContext.processedDocuments = [];
+      documentContext.finishedDocuments = [];
+      setup.metadata = undefined;
+      setup.numPages = 0;
+      setup.pageNumber = 1;
+      setup.scale = 1;
+      setup.rotation = 0;
+      setup.document = undefined;
+      setup.dataPath = undefined;
+      setup.pageRendering = false;
+      setup.pageNumPending = undefined;
+      setup.confirmProcessDialogOpen = false;
+    });
+  }
+
   $effect(() => {
     if (!setup.path) return;
     loadDocument();
-    return () => {
-      setup.document?.destroy().then(() => {
-        documentContext.selectedPages.splice(
-          0,
-          documentContext.selectedPages.length,
-        );
-        setup.metadata = undefined;
-        setup.numPages = 0;
-        setup.pageNumber = 1;
-        setup.scale = 1;
-        setup.rotation = 0;
-        setup.document = undefined;
-      });
-    };
+    return cleanup;
   });
 
-  // Load page
   $effect(() => {
     if (!setup.document || !validPageNumber) return;
     setup.scale;
     setup.rotation;
     documentContext.processingPages.length;
     documentContext.selectedPages.length;
+    documentContext.finishedDocuments.length;
+    documentContext.currentPageNumber = validPageNumber;
     untrack(() => loadPageQueue(validPageNumber));
     console.log("Loading page...");
   });
+
+  const toggleStatusCanvas = () => {
+    setup.showStatusCanvas = !setup.showStatusCanvas;
+    if (setup.showStatusCanvas) {
+      loadPageQueue(validPageNumber);
+    }
+  };
 </script>
 
 <svelte:window
@@ -686,6 +742,17 @@
   <div
     class="grid h-full w-full place-items-center overflow-auto bg-accent focus:outline-none"
   >
+    {#if setup.isExtractingImages}
+      <div
+        class="absolute text-primary inset-0 flex flex-col items-center justify-center space-y-4 text-center bg-accent/80 z-10"
+      >
+        <Loader2 class="h-8 w-8 animate-spin" />
+        <p class="text-lg font-semibold">Extraindo imagens do PDF...</p>
+        <p class="text-sm text-muted-foreground">
+          Por favor, aguarde. Isso pode levar alguns instantes.
+        </p>
+      </div>
+    {/if}
     <div bind:this={canvasContainer} class="relative">
       <canvas
         class={setup.numPages ? "" : "pointer-events-none"}
@@ -695,6 +762,7 @@
       <canvas
         bind:this={statusCanvas}
         class="pointer-events-none absolute left-0 top-0"
+        style="display: {setup.showStatusCanvas ? 'block' : 'none'};"
       ></canvas>
     </div>
   </div>
@@ -750,6 +818,21 @@
       aria-label="Zoom out"
     >
       <ZoomOut />
+    </Button>
+    <Button
+      tabindex={-1}
+      size="icon"
+      onclick={toggleStatusCanvas}
+      disabled={!setup.numPages}
+      aria-label={setup.showStatusCanvas
+        ? "Hide status overlay"
+        : "Show status overlay"}
+    >
+      {#if setup.showStatusCanvas}
+        <EyeOff />
+      {:else}
+        <Eye />
+      {/if}
     </Button>
   </div>
 
@@ -865,6 +948,9 @@
         ) ||
         documentContext.processedDocuments.some((pp) =>
           pp.pages.includes(setup.pageNumber),
+        ) ||
+        documentContext.finishedDocuments.some((fd) =>
+          fd.pages.includes(setup.pageNumber),
         )}
       aria-label={documentContext.selectedPages.includes(setup.pageNumber)
         ? "Deselect page"

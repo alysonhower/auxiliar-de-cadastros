@@ -1,8 +1,9 @@
 import type { PDFDocumentProxy, PDFPageProxy } from "pdfjs-dist";
 
-export interface FileNameGeneration {
+export interface DocumentInfo {
   file_name: string;
   file_name_history: string[];
+  pages_paths: string[];
   json_file_path: string;
   reasoning: {
     document_summary: {
@@ -33,6 +34,7 @@ export interface FileNameGeneration {
 export interface ProcessingPage {
   id: string;
   pages: number[];
+  pages_paths: string[];
   status: "pending" | "processing" | "completed" | "error";
   startTime: number;
   endTime?: number;
@@ -43,7 +45,7 @@ export interface ProcessingPage {
 
 export interface ProcessedDocument extends ProcessingPage {
   file_name: string;
-  debug: FileNameGeneration;
+  info: DocumentInfo;
 }
 
 export interface SetupState {
@@ -60,4 +62,6 @@ export interface SetupState {
   metadata: any | undefined;
   isActive: boolean;
   confirmProcessDialogOpen: boolean;
+  showStatusCanvas: boolean;
+  isExtractingImages: boolean;
 }

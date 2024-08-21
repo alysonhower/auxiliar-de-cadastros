@@ -1,15 +1,29 @@
 <script lang="ts">
   import { getContext } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
-  import { Ellipsis, Pencil, Check, X, History } from "lucide-svelte/icons";
+  import {
+    Ellipsis,
+    Pencil,
+    Check,
+    X,
+    History,
+    FileCheck,
+    RefreshCw,
+  } from "lucide-svelte/icons";
+  import { v4 as uuidv4 } from "uuid";
 
-  import { Button } from "$lib/components/ui/button";
+  import { Button, buttonVariants } from "$lib/components/ui/button";
   import * as Card from "$lib/components/ui/card";
   import * as Collapsible from "$lib/components/ui/collapsible";
   import * as DropdownMenu from "$lib/components/ui/dropdown-menu";
   import { Separator } from "$lib/components/ui/separator";
+  import * as Dialog from "$lib/components/ui/dialog";
 
-  import type { FileNameGeneration, ProcessedDocument } from "$lib/types";
+  import type {
+    DocumentInfo,
+    ProcessedDocument,
+    ProcessingPage,
+  } from "$lib/types";
   import type { DocumentState } from "./documentContext.svelte";
 
   const documentContext: DocumentState = getContext("documentContext");
@@ -43,6 +57,7 @@
   let showHistoryMap = $state(new Map<string, boolean>());
   let isDropdownOpenMap = $state(new Map<string, boolean>());
   let historyHoverTimeoutMap = $state(new Map<string, NodeJS.Timeout>());
+  let confirmProcessDialogOpenMap = $state(new Map<string, boolean>());
 
   const setMapValue = (map: Map<string, any>, id: string, value: any) => {
     return new Map(map).set(id, value);
@@ -89,7 +104,7 @@
         name: editedFileName,
       });
       document.file_name = editedFileName;
-      document.debug = updatedDocumentInfo as FileNameGeneration;
+      document.info = updatedDocumentInfo as DocumentInfo;
       showHistoryMap = setMapValue(showHistoryMap, document.id, false);
     } catch (error) {
       console.error("Error updating file name:", error);
@@ -123,14 +138,161 @@
     return times;
   });
 
+  const handleFinalPipeline = async (document: ProcessedDocument) => {
+    if (documentContext.processingPages.some(page => page.id === document.id)) return;
+    setConfirmProcessDialogOpen(document.id, false);
+    documentContext.processedDocuments =
+      documentContext.processedDocuments.filter(
+        (doc) => doc.id !== document.id,
+      );
+    documentContext.processingPages = [
+      ...documentContext.processingPages,
+      {
+        ...document,
+        status: "processing",
+        startTime: Date.now(),
+      },
+    ];
+
+    try {
+      await invoke("final_pipeline", {
+        documentInfo: document.info,
+      });
+      documentContext.processingPages = documentContext.processingPages.filter(
+        (page) => page.id !== document.id,
+      );
+      document.status = "completed";
+      document.endTime = Date.now();
+      documentContext.finishedDocuments = [
+        ...documentContext.finishedDocuments,
+        document,
+      ];
+    } catch (error) {
+      console.error("Error in final pipeline:", error);
+      documentContext.processingPages = documentContext.processingPages.filter(
+        (page) => page.id !== document.id,
+      );
+      document.status = "error";
+      document.error = error instanceof Error ? error.message : String(error);
+      documentContext.processedDocuments = [
+        ...documentContext.processedDocuments,
+        document,
+      ];
+    }
+  };
+
+  const setConfirmProcessDialogOpen = (id: string, isOpen: boolean) => {
+    confirmProcessDialogOpenMap = new Map(confirmProcessDialogOpenMap).set(id, isOpen);
+  };
+
+  const isConfirmProcessDialogOpen = (id: string) => {
+    return confirmProcessDialogOpenMap.get(id) || false;
+  };
+
+  const handleRetry = async (document: ProcessedDocument) => {
+    const newProcess: ProcessingPage = {
+      id: uuidv4(),
+      pages: [...document.pages],
+      pages_paths: [...document.pages_paths],
+      status: "processing",
+      startTime: Date.now(),
+    };
+
+    documentContext.processingPages = [
+      ...documentContext.processingPages,
+      newProcess,
+    ];
+
+    documentContext.processedDocuments =
+      documentContext.processedDocuments.filter(
+        (doc) => doc.id !== document.id,
+      );
+
+    try {
+      const res = await invoke<DocumentInfo>("anthropic_pipeline", {
+        paths: newProcess.pages_paths,
+      });
+
+      const newProcessedDocument: ProcessedDocument = {
+        ...newProcess,
+        file_name: res.file_name,
+        json_file_path: res.json_file_path,
+        info: {
+          ...res,
+        },
+        status: "completed",
+        endTime: Date.now(),
+      };
+
+      documentContext.processedDocuments = [
+        ...documentContext.processedDocuments,
+        newProcessedDocument,
+      ];
+    } catch (err) {
+      console.error("Error in anthropic_pipeline:", err);
+      const errorProcessedDocument: ProcessedDocument = {
+        ...newProcess,
+        file_name: "",
+        json_file_path: "",
+        info: {} as DocumentInfo,
+        status: "error",
+        endTime: Date.now(),
+        error: err instanceof Error ? err.toString() : String(err),
+      };
+      documentContext.processedDocuments = [
+        ...documentContext.processedDocuments,
+        errorProcessedDocument,
+      ];
+    } finally {
+      documentContext.processingPages = documentContext.processingPages.filter(
+        (pp) => pp.id !== newProcess.id,
+      );
+    }
+  };
+
+  const getMinPageNumber = (pages: number[]): number => {
+    return Math.min(...pages);
+  };
+
+  const isCurrentPage = (
+    document: ProcessingPage | ProcessedDocument | ProcessedDocument,
+  ) => {
+    return document.pages.includes(documentContext.currentPageNumber);
+  };
+
+  const handleGlobalKeydown = (event: KeyboardEvent) => {
+    if (event.ctrlKey && event.key === 'Enter') {
+      const currentDocument = [...documentContext.processedDocuments, ...documentContext.finishedDocuments]
+        .find(doc => isCurrentPage(doc));
+      if (currentDocument) {
+        event.preventDefault();
+        setConfirmProcessDialogOpen(currentDocument.id, true);
+      }
+    }
+  };
+
   $effect(() => {
     const interval = setInterval(() => (time = new Date()), 1000);
     return () => clearInterval(interval);
   });
 
   $effect(() => {
-    documentContext.processingPages.sort((a, b) => b.startTime - a.startTime);
-    documentContext.processedDocuments.sort((a, b) => b.endTime! - a.endTime!);
+    documentContext.processingPages.sort(
+      (a, b) => getMinPageNumber(a.pages) - getMinPageNumber(b.pages),
+    );
+    documentContext.processedDocuments.sort(
+      (a, b) => getMinPageNumber(a.pages) - getMinPageNumber(b.pages),
+    );
+    documentContext.finishedDocuments.sort(
+      (a, b) => getMinPageNumber(a.pages) - getMinPageNumber(b.pages),
+    );
+  });
+
+  $effect(() => {
+    window.addEventListener('keydown', handleGlobalKeydown);
+    return () => {
+      window.removeEventListener('keydown', handleGlobalKeydown);
+    };
   });
 </script>
 
@@ -142,7 +304,11 @@
   </h1>
   <div class="flex h-full w-full flex-col gap-4">
     {#each documentContext.processingPages as processingPage}
-      <Card.Root class="p-3 max-h-[50vh] flex flex-col">
+      <Card.Root
+        class="p-3 max-h-[50vh] flex flex-col {isCurrentPage(processingPage)
+          ? 'ring-2 ring-primary'
+          : ''}"
+      >
         <Card.Header class="pb-1 flex-shrink-0">
           <Card.Title class="text-sm">
             <span class="font-semibold text-primary break-all">
@@ -180,7 +346,12 @@
     {/each}
 
     {#each documentContext.processedDocuments as processedDocument}
-      <Card.Root class="p-3 max-h-[50vh] flex flex-col">
+      <Card.Root
+        class="p-3 max-h-[50vh] flex flex-col {isCurrentPage(processedDocument)
+          ? 'ring-2 ring-primary'
+          : ''}"
+        tabindex={isCurrentPage(processedDocument) ? 0 : -1}
+      >
         <Card.Header class="pb-1 flex-shrink-0">
           <Card.Title class="flex flex-col gap-1 text-sm">
             <span class="font-semibold text-primary break-all">
@@ -236,7 +407,7 @@
               </span>
               <div class="flex justify-end space-x-1 relative">
                 <div class="relative">
-                  {#if processedDocument.debug?.file_name_history && processedDocument.debug.file_name_history.length > 1}
+                  {#if processedDocument.info?.file_name_history && processedDocument.info.file_name_history.length > 1}
                     <!-- svelte-ignore a11y_no_static_element_interactions -->
                     <div
                       class="absolute right-full transition-all duration-300 ease-in-out transform"
@@ -289,7 +460,7 @@
                             <DropdownMenu.Separator />
                           </div>
                           <div class="overflow-y-auto">
-                            {#each processedDocument.debug.file_name_history.slice() as historyItem}
+                            {#each processedDocument.info.file_name_history.slice() as historyItem}
                               <DropdownMenu.Item
                                 onclick={() => {
                                   editedFileName = historyItem;
@@ -325,6 +496,49 @@
                   >
                     <Pencil class="h-3.5 w-3.5" />
                   </Button>
+
+                  <Dialog.Root
+                    open={isConfirmProcessDialogOpen(processedDocument.id)}
+                    onOpenChange={(open) =>
+                      setConfirmProcessDialogOpen(processedDocument.id, open)}
+                  >
+                    <Dialog.Trigger
+                      tabindex={-1}
+                      disabled={showHistoryMap.get(processedDocument.id) ||
+                        editingDocumentId === processedDocument.id}
+                      class={buttonVariants({
+                        size: "icon",
+                        className: "h-7 w-7",
+                      })}
+                      aria-label="Process selected pages"
+                    >
+                      <FileCheck class="h-3.5 w-3.5" />
+                    </Dialog.Trigger>
+                    <Dialog.Content class="sm:max-w-[425px]">
+                      <Dialog.Header>
+                        <Dialog.Title>
+                          {processedDocument.pages.length > 1
+                            ? "Processar as páginas selecionadas?"
+                            : "Processar página selecionada?"}
+                        </Dialog.Title>
+                        <Dialog.Description>
+                          Você está prestes a processar {processedDocument.pages
+                            .length > 1
+                            ? "as páginas"
+                            : "a página"}
+                          {formatPagesText(processedDocument.pages)}. Deseja
+                          continuar?
+                        </Dialog.Description>
+                      </Dialog.Header>
+                      <Dialog.Footer>
+                        <Button
+                          onclick={() => handleFinalPipeline(processedDocument)}
+                        >
+                          Processar
+                        </Button>
+                      </Dialog.Footer>
+                    </Dialog.Content>
+                  </Dialog.Root>
                 </div>
               </div>
             {/if}
@@ -345,6 +559,21 @@
               processedDocument.endTime,
             )}
           </p>
+          {#if processedDocument.status === "error"}
+            <p class="text-red-500">
+              <span class="font-semibold">Erro:</span>
+              {processedDocument.error}
+            </p>
+            <Button
+              size="sm"
+              variant="outline"
+              onclick={() => handleRetry(processedDocument)}
+              class="mt-2"
+            >
+              <RefreshCw class="h-3.5 w-3.5 mr-1" />
+              Tentar novamente
+            </Button>
+          {/if}
           <Collapsible.Root>
             <div class="sticky top-0">
               <Collapsible.Trigger>
@@ -372,10 +601,78 @@
                   {processedDocument.error}
                 </p>
               {/if}
-              <p class="font-semibold text-primary">Debug:</p>
+              <p class="font-semibold text-primary">info:</p>
               <pre
                 class="text-wrap w-full max-w-full overflow-x-auto whitespace-pre-wrap break-words text-[10px]">
-                {JSON.stringify(processedDocument.debug, null, 2)}
+                {JSON.stringify(processedDocument.info, null, 2)}
+              </pre>
+            </Collapsible.Content>
+          </Collapsible.Root>
+        </Card.Content>
+      </Card.Root>
+    {/each}
+
+    {#each documentContext.finishedDocuments as finishedDocument}
+      <Card.Root
+        class="p-3 max-h-[50vh] flex flex-col {isCurrentPage(finishedDocument)
+          ? 'ring-2 ring-primary'
+          : ''}"
+        tabindex={isCurrentPage(finishedDocument) ? 0 : -1}
+      >
+        <Card.Header class="pb-1 flex-shrink-0">
+          <Card.Title class="flex flex-col gap-1 text-sm">
+            <span class="font-semibold text-primary break-all">
+              Documento Finalizado:
+            </span>
+            <span class="break-all w-full font-semibold text-sm mb-1">
+              {finishedDocument.file_name}
+            </span>
+          </Card.Title>
+        </Card.Header>
+        <Separator class="mt-1.5 bg-secondary mb-3 flex-shrink-0" />
+        <Card.Content class="space-y-1 text-xs overflow-y-auto">
+          <p>
+            <span class="font-semibold text-primary">Status:</span>
+            Finalizado
+          </p>
+          <p>
+            <span class="font-semibold text-primary">Páginas:</span>
+            {formatPagesText(finishedDocument.pages)}
+          </p>
+          <p>
+            <span class="font-semibold text-primary"
+              >Tempo de processamento:</span
+            >
+            {formatDurationText(
+              finishedDocument.startTime,
+              finishedDocument.endTime,
+            )}
+          </p>
+          <Collapsible.Root>
+            <div class="sticky top-0">
+              <Collapsible.Trigger>
+                <Button variant="secondary" size="icon" class="h-6 w-6 mt-1">
+                  <Ellipsis class="h-3 w-3" />
+                </Button>
+              </Collapsible.Trigger>
+            </div>
+            <Collapsible.Content class="mt-1.5 space-y-1">
+              <p>
+                <span class="font-semibold text-primary">ID:</span>
+                {finishedDocument.id}
+              </p>
+              <p>
+                <span class="font-semibold text-primary">Início:</span>
+                {new Date(finishedDocument.startTime).toLocaleString()}
+              </p>
+              <p>
+                <span class="font-semibold text-primary">Fim:</span>
+                {new Date(finishedDocument.endTime!).toLocaleString()}
+              </p>
+              <p class="font-semibold text-primary">info:</p>
+              <pre
+                class="text-wrap w-full max-w-full overflow-x-auto whitespace-pre-wrap break-words text-[10px]">
+                {JSON.stringify(finishedDocument.info, null, 2)}
               </pre>
             </Collapsible.Content>
           </Collapsible.Root>

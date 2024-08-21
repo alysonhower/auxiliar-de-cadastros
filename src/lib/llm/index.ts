@@ -22,7 +22,7 @@ export const extractPDFImages = async (pdfPath: string, outputDir: string) => {
     "150",
     pdfPath,
     "-resize",
-    "1000x1000",
+    "1500x1500",
     "-scene",
     "1",
     "+adjoin",

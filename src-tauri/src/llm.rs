@@ -285,27 +285,42 @@ async fn process_xml(
     api_key: &str,
     prompt: &str,
 ) -> Result<String, String> {
-    let response = client
-        .post("https://api.anthropic.com/v1/messages")
-        .header("x-api-key", api_key)
-        .header("anthropic-version", "2023-06-01")
-        .header("content-type", "application/json")
-        .json(&json!({
-            "model": "claude-3-5-sonnet-20240620",
-            "max_tokens": 4096,
-            "system": SYSTEM_MESSAGE,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": prompt,
-                }
-            ]
-        }))
-        .send()
-        .await
-        .map_err(|e| format!("Error sending request: {:?}", e))?;
+    let max_retries = 5;
+    let mut retry_count = 0;
 
-    handle_anthropic_response(response, "").await
+    loop {
+        let response = client
+            .post("https://api.anthropic.com/v1/messages")
+            .header("x-api-key", api_key)
+            .header("anthropic-version", "2023-06-01")
+            .header("content-type", "application/json")
+            .json(&json!({
+                "model": "claude-3-5-sonnet-20240620",
+                "max_tokens": 4096,
+                "system": SYSTEM_MESSAGE,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": prompt,
+                    }
+                ]
+            }))
+            .send()
+            .await
+            .map_err(|e| format!("Error sending request: {:?}", e))?;
+
+        println!("Response: {:?}", response);
+        print_rate_limit_headers(&response);
+
+        if response.status() == 529 && retry_count < max_retries {
+            println!("Received 529 status code. Retrying after 200ms...");
+            sleep(Duration::from_millis(200)).await;
+            retry_count += 1;
+            continue;
+        }
+
+        return handle_anthropic_response(response, "").await;
+    }
 }
 
 fn read_json_file(json_path: &Path) -> Result<DocumentInfo, String> {

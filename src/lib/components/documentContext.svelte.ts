@@ -1,4 +1,4 @@
-import type { ProcessingPage, ProcessedDocument } from '$lib/types';
+import type { ProcessingPage, ProcessedDocument } from "$lib/types";
 
 export type DocumentState = {
   selectedPages: number[];
@@ -12,11 +12,23 @@ export function createDocumentState(): DocumentState {
   let processedDocuments = $state<ProcessedDocument[]>([]);
 
   return {
-    get selectedPages() { return selectedPages; },
-    set selectedPages(value) { selectedPages = value; },
-    get processingPages() { return processingPages; },
-    set processingPages(value) { processingPages = value; },
-    get processedDocuments() { return processedDocuments; },
-    set processedDocuments(value) { processedDocuments = value; },
+    get selectedPages() {
+      return selectedPages;
+    },
+    set selectedPages(value) {
+      selectedPages = value;
+    },
+    get processingPages() {
+      return processingPages;
+    },
+    set processingPages(value) {
+      processingPages = value;
+    },
+    get processedDocuments() {
+      return processedDocuments;
+    },
+    set processedDocuments(value) {
+      processedDocuments = value;
+    },
   };
 }

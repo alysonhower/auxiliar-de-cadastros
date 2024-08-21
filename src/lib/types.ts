@@ -33,7 +33,7 @@ export interface FileNameGeneration {
 export interface ProcessingPage {
   id: string;
   pages: number[];
-  status: 'pending' | 'processing' | 'completed' | 'error';
+  status: "pending" | "processing" | "completed" | "error";
   startTime: number;
   endTime?: number;
   elapsed?: number;

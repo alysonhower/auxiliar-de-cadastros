@@ -22,7 +22,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "check": "svelte-check --tsconfig ./tsconfig.json",
-    "format": "prettier --write '**/*.{svelte,ts,js}'",
+    "format": "prettier --write --plugin prettier-plugin-svelte './**/*.{svelte,ts,js}'",
     "tauri": "tauri"
   },
   "dependencies": {

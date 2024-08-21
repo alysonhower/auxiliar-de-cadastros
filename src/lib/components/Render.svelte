@@ -1,11 +1,11 @@
 <script lang="ts">
-  // FIX PROCESSING PAGES WHEN ADD OTHER DOCUMENT
-  import { extractPDFImages } from '$lib/llm';
-  import * as pdfjs from 'pdfjs-dist';
-  import { getContext, untrack } from 'svelte';
-  import { Button, buttonVariants } from '$lib/components/ui/button';
-  import { Input } from '$lib/components/ui/input';
-  import * as Dialog from '$lib/components/ui/dialog';
+  // TODO: FIX PROCESSING PAGES WHEN ADD OTHER DOCUMENT
+  import { extractPDFImages } from "$lib/llm";
+  import * as pdfjs from "pdfjs-dist";
+  import { getContext, untrack } from "svelte";
+  import { Button, buttonVariants } from "$lib/components/ui/button";
+  import { Input } from "$lib/components/ui/input";
+  import * as Dialog from "$lib/components/ui/dialog";
   import {
     ZoomIn,
     ZoomOut,
@@ -19,31 +19,34 @@
     FilePlus,
     FileMinus,
     FileCheck,
-  } from 'lucide-svelte/icons';
-  import { homeDir, resolve } from '@tauri-apps/api/path';
+  } from "lucide-svelte/icons";
+  import { homeDir, resolve } from "@tauri-apps/api/path";
   import {
     readFile,
     exists,
     mkdir,
     readDir,
     remove,
-  } from '@tauri-apps/plugin-fs';
-  import { open } from '@tauri-apps/plugin-dialog';
-  import type { TextContent, TextItem } from 'pdfjs-dist/types/src/display/api';
-  import { invoke } from '@tauri-apps/api/core';
-  import type { SetupState, FileNameGeneration, ProcessingPage, ProcessedDocument } from '$lib/types';
-  import { v4 as uuidv4 } from 'uuid';
-  import type { DocumentState } from './documentContext.svelte';
+  } from "@tauri-apps/plugin-fs";
+  import { open } from "@tauri-apps/plugin-dialog";
+  import type { TextContent, TextItem } from "pdfjs-dist/types/src/display/api";
+  import { invoke } from "@tauri-apps/api/core";
+  import type {
+    SetupState,
+    FileNameGeneration,
+    ProcessingPage,
+    ProcessedDocument,
+  } from "$lib/types";
+  import { v4 as uuidv4 } from "uuid";
+  import type { DocumentState } from "./documentContext.svelte";
 
-  // Constants
   const MIN_SCALE = 0.4;
   const MAX_SCALE = 10;
   const ROTATION_INCREMENT = 90;
   const ZOOM_INCREMENT = 0.1;
 
-  // Import PDFjs-dist worker
   pdfjs.GlobalWorkerOptions.workerSrc = new URL(
-    'pdfjs-dist/build/pdf.worker.mjs',
+    "pdfjs-dist/build/pdf.worker.mjs",
     import.meta.url,
   ).toString();
 
@@ -79,9 +82,9 @@
       setup.numPages = document.numPages;
       const metadata = await document.getMetadata();
       setup.metadata = metadata;
-      console.log('Document loaded!\nMetadata:\n', metadata);
+      console.log("Document loaded!\nMetadata:\n", metadata);
     } catch (error) {
-      handleError('Error loading document:', error);
+      handleError("Error loading document:", error);
     }
   };
 
@@ -90,12 +93,12 @@
     textContent: TextContent,
   ) => {
     const svg = textLayer;
-    svg.innerHTML = '';
-    svg.setAttribute('width', `${viewport.width}px`);
-    svg.setAttribute('height', `${viewport.height}px`);
-    svg.setAttribute('font-size', '1');
+    svg.innerHTML = "";
+    svg.setAttribute("width", `${viewport.width}px`);
+    svg.setAttribute("height", `${viewport.height}px`);
+    svg.setAttribute("font-size", "1");
     textContent.items.forEach((item) => {
-      if ('str' in item) {
+      if ("str" in item) {
         const textItem = item as TextItem;
         const tx = pdfjs.Util.transform(
           pdfjs.Util.transform(viewport.transform, textItem.transform),
@@ -103,12 +106,12 @@
         );
         const style = textContent.styles[textItem.fontName];
         const text = document.createElementNS(
-          'http://www.w3.org/2000/svg',
-          'svg:text',
+          "http://www.w3.org/2000/svg",
+          "svg:text",
         );
-        text.setAttribute('transform', `matrix(${tx.join(' ')})`);
-        text.setAttribute('font-family', style.fontFamily);
-        text.setAttribute('fill', 'transparent');
+        text.setAttribute("transform", `matrix(${tx.join(" ")})`);
+        text.setAttribute("font-family", style.fontFamily);
+        text.setAttribute("fill", "transparent");
         text.textContent = textItem.str;
         svg.append(text);
       }
@@ -129,21 +132,29 @@
     let textColor: string;
     let borderColor: string;
 
-    if (documentContext.processedDocuments.some(pp => pp.pages.includes(pageNumber))) {
+    if (
+      documentContext.processedDocuments.some((pp) =>
+        pp.pages.includes(pageNumber),
+      )
+    ) {
       text = `Página ${pageNumber} processada`;
-      bgColor = 'rgba(186, 79, 125, 0.2)';
-      textColor = 'rgba(156, 49, 95, 1)';
-      borderColor = 'rgba(186, 79, 125, 1)';
-    } else if (documentContext.processingPages.some(pp => pp.pages.includes(pageNumber))) {
+      bgColor = "rgba(186, 79, 125, 0.2)";
+      textColor = "rgba(156, 49, 95, 1)";
+      borderColor = "rgba(186, 79, 125, 1)";
+    } else if (
+      documentContext.processingPages.some((pp) =>
+        pp.pages.includes(pageNumber),
+      )
+    ) {
       text = `Página ${pageNumber} em processamento...`;
-      bgColor = 'rgba(255, 223, 186, 0.5)';
-      textColor = 'rgba(186, 79, 25, 1)';
-      borderColor = 'rgba(255, 165, 0, 0.8)';
+      bgColor = "rgba(255, 223, 186, 0.5)";
+      textColor = "rgba(186, 79, 25, 1)";
+      borderColor = "rgba(255, 165, 0, 0.8)";
     } else if (documentContext.selectedPages.includes(pageNumber)) {
       text = `Página ${pageNumber} selecionada`;
-      bgColor = 'rgba(173, 216, 230, 0.5)';
-      textColor = 'rgba(0, 90, 156, 1)';
-      borderColor = 'rgba(70, 130, 180, 0.8)';
+      bgColor = "rgba(173, 216, 230, 0.5)";
+      textColor = "rgba(0, 90, 156, 1)";
+      borderColor = "rgba(70, 130, 180, 0.8)";
     } else {
       return;
     }
@@ -160,14 +171,14 @@
     canvasContext.fillStyle = bgColor;
     canvasContext.fillRect(8, 8, viewportWidth - 16, viewportHeight - 16);
 
-    canvasContext.shadowColor = 'rgba(255, 255, 255, 0.7)';
+    canvasContext.shadowColor = "rgba(255, 255, 255, 0.7)";
     canvasContext.shadowBlur = 5;
     canvasContext.shadowOffsetX = 1;
     canvasContext.shadowOffsetY = 1;
     canvasContext.fillStyle = textColor;
     canvasContext.fillText(text, x, y);
 
-    canvasContext.strokeStyle = 'rgba(0, 0, 0, 0.4)';
+    canvasContext.strokeStyle = "rgba(0, 0, 0, 0.4)";
     canvasContext.lineWidth = 3;
     canvasContext.strokeText(text, x, y);
   };
@@ -191,8 +202,8 @@
       statusCanvas.height = height;
       statusCanvas.width = width;
 
-      const canvasContext = renderCanvas.getContext('2d');
-      const statusCanvasContext = statusCanvas.getContext('2d');
+      const canvasContext = renderCanvas.getContext("2d");
+      const statusCanvasContext = statusCanvas.getContext("2d");
 
       if (canvasContext && statusCanvasContext) {
         applyStatusCanvasStyles(pageNumber, statusCanvasContext, width, height);
@@ -214,7 +225,7 @@
         setup.pageNumPending = undefined;
       }
     } catch (error) {
-      handleError('Error loading page:', error);
+      handleError("Error loading page:", error);
       setup.pageRendering = false;
     }
   };
@@ -260,20 +271,24 @@
       const file = await open({
         multiple: false,
         directory: false,
-        filters: [{ name: 'PDF', extensions: ['pdf'] }],
-        title: 'Por favor, selecione um PDF',
+        filters: [{ name: "PDF", extensions: ["pdf"] }],
+        title: "Por favor, selecione um PDF",
         defaultPath: await homeDir(),
       });
       if (file) setup.path = file.path;
     } catch (error) {
-      handleError('Error selecting PDF:', error);
+      handleError("Error selecting PDF:", error);
     }
   };
 
   const handleSelectPage = () => {
     if (
-      documentContext.processingPages.some(pp => pp.pages.includes(validPageNumber)) ||
-      documentContext.processedDocuments.some(pp => pp.pages.includes(validPageNumber))
+      documentContext.processingPages.some((pp) =>
+        pp.pages.includes(validPageNumber),
+      ) ||
+      documentContext.processedDocuments.some((pp) =>
+        pp.pages.includes(validPageNumber),
+      )
     )
       return;
     const pageNumber = validPageNumber;
@@ -289,7 +304,7 @@
     console.log(
       documentContext.selectedPages.length > 0
         ? selectedPagesText
-        : 'Nenhuma página selecionada.',
+        : "Nenhuma página selecionada.",
     );
   };
 
@@ -302,14 +317,22 @@
         .find(
           (page) =>
             page < pageNumber &&
-            !documentContext.processingPages.some(pp => pp.pages.includes(page)) &&
-            !documentContext.processedDocuments.some(pp => pp.pages.includes(page)),
+            !documentContext.processingPages.some((pp) =>
+              pp.pages.includes(page),
+            ) &&
+            !documentContext.processedDocuments.some((pp) =>
+              pp.pages.includes(page),
+            ),
         );
       const nextSelectedPage = documentContext.selectedPages.find(
         (page) =>
           page > pageNumber &&
-          !documentContext.processingPages.some(pp => pp.pages.includes(page)) &&
-          !documentContext.processedDocuments.some(pp => pp.pages.includes(page)),
+          !documentContext.processingPages.some((pp) =>
+            pp.pages.includes(page),
+          ) &&
+          !documentContext.processedDocuments.some((pp) =>
+            pp.pages.includes(page),
+          ),
       );
       setup.pageNumber = prevSelectedPage || nextSelectedPage || pageNumber;
     } else {
@@ -323,8 +346,12 @@
           (page) =>
             page < pageNumber &&
             !documentContext.selectedPages.includes(page) &&
-            !documentContext.processingPages.some(pp => pp.pages.includes(page)) &&
-            !documentContext.processedDocuments.some(pp => pp.pages.includes(page))
+            !documentContext.processingPages.some((pp) =>
+              pp.pages.includes(page),
+            ) &&
+            !documentContext.processedDocuments.some((pp) =>
+              pp.pages.includes(page),
+            ),
         );
       const nextUnselectedPage = Array.from(
         { length: setup.numPages },
@@ -333,8 +360,12 @@
         (page) =>
           page > pageNumber &&
           !documentContext.selectedPages.includes(page) &&
-          !documentContext.processingPages.some(pp => pp.pages.includes(page)) &&
-          !documentContext.processedDocuments.some(pp => pp.pages.includes(page))
+          !documentContext.processingPages.some((pp) =>
+            pp.pages.includes(page),
+          ) &&
+          !documentContext.processedDocuments.some((pp) =>
+            pp.pages.includes(page),
+          ),
       );
       setup.pageNumber = prevUnselectedPage || nextUnselectedPage || pageNumber;
     }
@@ -375,7 +406,7 @@
   const handleKeyDown = (e: KeyboardEvent) => {
     if (!setup.isActive) return;
 
-    if (e.key === 'Escape') {
+    if (e.key === "Escape") {
       e.preventDefault();
       handleSelectPDF();
       return;
@@ -384,32 +415,36 @@
     if (!setup.numPages) return;
 
     switch (e.key) {
-      case 'Home':
+      case "Home":
         handleFirstPage();
         break;
-      case 'End':
+      case "End":
         handleLastPage();
         break;
-      case 'ArrowLeft':
+      case "ArrowLeft":
         e.shiftKey ? handleFirstPage() : handlePrevPage();
         break;
-      case 'ArrowRight':
+      case "ArrowRight":
         e.shiftKey ? handleLastPage() : handleNextPage();
         break;
-      case ' ':
+      case " ":
         e.preventDefault();
         handleSelectPage();
         break;
-      case 'Backspace':
-        if (documentContext.selectedPages.length) setup.pageNumber = documentContext.selectedPages.pop()!;
+      case "Backspace":
+        if (documentContext.selectedPages.length)
+          setup.pageNumber = documentContext.selectedPages.pop()!;
         break;
-      case 'Enter':
-        if (documentContext.selectedPages.length && !setup.confirmProcessDialogOpen) {
+      case "Enter":
+        if (
+          documentContext.selectedPages.length &&
+          !setup.confirmProcessDialogOpen
+        ) {
           e.preventDefault();
           setup.confirmProcessDialogOpen = true;
         }
         break;
-      case 'Tab':
+      case "Tab":
         e.preventDefault();
         if (e.shiftKey) {
           handlePrevPage();
@@ -421,16 +456,16 @@
 
     if (e.ctrlKey) {
       switch (e.key) {
-        case '=':
+        case "=":
           handleZoomIn();
           break;
-        case '-':
+        case "-":
           handleZoomOut();
           break;
-        case 'ArrowLeft':
+        case "ArrowLeft":
           handleRotateLeft();
           break;
-        case 'ArrowRight':
+        case "ArrowRight":
           handleRotateRight();
           break;
       }
@@ -438,31 +473,37 @@
 
     if (e.shiftKey) {
       switch (e.key) {
-        case 'ArrowUp':
+        case "ArrowUp":
           handleZoomIn();
           break;
-        case 'ArrowDown':
+        case "ArrowDown":
           handleZoomOut();
           break;
       }
     }
   };
 
- const handleProcessPages = () => {
+  const handleProcessPages = () => {
     const newProcess: ProcessingPage = {
       id: uuidv4(),
       pages: [...documentContext.selectedPages],
-      status: 'pending',
+      status: "pending",
       startTime: Date.now(),
     };
-    documentContext.processingPages = [...documentContext.processingPages, newProcess];
-    documentContext.selectedPages.splice(0, documentContext.selectedPages.length);
+    documentContext.processingPages = [
+      ...documentContext.processingPages,
+      newProcess,
+    ];
+    documentContext.selectedPages.splice(
+      0,
+      documentContext.selectedPages.length,
+    );
     let processPages: string[] = [];
     for (const pageNumber of newProcess.pages) {
       processPages.push(`${setup.dataPath}\\page-${pageNumber}.webp`);
     }
-    newProcess.status = 'processing';
-    invoke<FileNameGeneration>('anthropic_pipeline', {
+    newProcess.status = "processing";
+    invoke<FileNameGeneration>("anthropic_pipeline", {
       paths: processPages,
     })
       .then((res) => {
@@ -471,29 +512,41 @@
           file_name: res.file_name,
           json_file_path: res.json_file_path, // Add this line
           debug: res,
-          status: 'completed',
+          status: "completed",
           endTime: Date.now(),
         };
         console.log("Starting new process:", newProcessedDocument);
-        documentContext.processedDocuments = [...documentContext.processedDocuments, newProcessedDocument];
-        documentContext.processingPages = documentContext.processingPages.filter(pp => pp.id !== newProcess.id);
+        documentContext.processedDocuments = [
+          ...documentContext.processedDocuments,
+          newProcessedDocument,
+        ];
+        documentContext.processingPages =
+          documentContext.processingPages.filter(
+            (pp) => pp.id !== newProcess.id,
+          );
       })
       .catch((err) => {
         console.error("Error in anthropic_pipeline:", err);
         const errorProcessedDocument: ProcessedDocument = {
           ...newProcess,
-          file_name: '',
-          json_file_path: '', // Add this line
+          file_name: "",
+          json_file_path: "", // Add this line
           debug: {} as FileNameGeneration,
-          status: 'error',
+          status: "error",
           endTime: Date.now(),
           error: err.toString(),
         };
-        documentContext.processedDocuments = [...documentContext.processedDocuments, errorProcessedDocument];
-        documentContext.processingPages = documentContext.processingPages.filter(pp => pp.id !== newProcess.id);
+        documentContext.processedDocuments = [
+          ...documentContext.processedDocuments,
+          errorProcessedDocument,
+        ];
+        documentContext.processingPages =
+          documentContext.processingPages.filter(
+            (pp) => pp.id !== newProcess.id,
+          );
       });
 
-    console.log('Páginas em processamento: ' + newProcess.pages);
+    console.log("Páginas em processamento: " + newProcess.pages);
   };
 
   const selectedPagesText = $derived.by(() => {
@@ -502,7 +555,7 @@
     } else if (documentContext.selectedPages.length === 2) {
       return `Páginas ${documentContext.selectedPages[0]} e ${documentContext.selectedPages[1]} selecionadas.`;
     } else {
-      return `Páginas selecionadas: ${documentContext.selectedPages.slice(0, -1).join(', ')} e ${documentContext.selectedPages.slice(-1)}.`;
+      return `Páginas selecionadas: ${documentContext.selectedPages.slice(0, -1).join(", ")} e ${documentContext.selectedPages.slice(-1)}.`;
     }
   });
 
@@ -513,9 +566,9 @@
   async function checkWebpFiles(dataPath: string) {
     try {
       const files = await readDir(dataPath);
-      const webpFiles = files.filter((file) => file.name.endsWith('.webp'));
+      const webpFiles = files.filter((file) => file.name.endsWith(".webp"));
       if (webpFiles.length === setup.numPages) {
-        console.log('Number of .webp files matches numPages');
+        console.log("Number of .webp files matches numPages");
       } else {
         console.log(
           `Mismatch: ${webpFiles.length} .webp files found, expected ${setup.numPages}`,
@@ -525,14 +578,14 @@
       }
       setup.pageNumber = 1;
     } catch (error) {
-      handleError('Error checking .webp files:', error);
+      handleError("Error checking .webp files:", error);
     }
   }
 
   async function clearDataFolder(dataPath: string, files: any[]) {
     let allRemovalsSuccessful = true;
     for (const file of files) {
-      if (file.name.endsWith('.webp')) {
+      if (file.name.endsWith(".webp")) {
         try {
           await remove(`${dataPath}/${file.name}`);
           console.log(`Removed file: ${file.name}`);
@@ -542,17 +595,17 @@
         }
       }
     }
-    console.log('Data folder cleared');
+    console.log("Data folder cleared");
     return allRemovalsSuccessful;
   }
 
   async function extractImages(dataPath: string) {
     try {
-      const path = await resolve(dataPath, 'page-%d.webp');
+      const path = await resolve(dataPath, "page-%d.webp");
       await extractPDFImages(setup.path!, path);
-      console.log('Images extracted successfully');
+      console.log("Images extracted successfully");
     } catch (error) {
-      handleError('Error extracting images:', error);
+      handleError("Error extracting images:", error);
     }
   }
 
@@ -561,19 +614,18 @@
     // TODO: Implement user-facing error handling
   }
 
-  // Verify data path and extract pages if necessary
   $effect.pre(() => {
     if (!setup.path || !setup.numPages) return;
-    const dataPath = setup.path.endsWith('.pdf')
-      ? setup.path.replace('.pdf', '-data')
-      : setup.path + '-data';
+    const dataPath = setup.path.endsWith(".pdf")
+      ? setup.path.replace(".pdf", "-data")
+      : setup.path + "-data";
     exists(dataPath)
       .then(async (isExist) => {
         if (isExist) {
-          console.log('Pages data dir already exists at: ' + dataPath);
+          console.log("Pages data dir already exists at: " + dataPath);
           return checkWebpFiles(dataPath);
         } else {
-          console.log('Pages data not found. Extracting data from pages...');
+          console.log("Pages data not found. Extracting data from pages...");
           await mkdir(dataPath);
           return await extractImages(dataPath);
         }
@@ -582,7 +634,7 @@
         setup.dataPath = dataPath;
       })
       .catch((error) => {
-        handleError('Error processing PDF:', error);
+        handleError("Error processing PDF:", error);
       });
   });
 
@@ -592,7 +644,10 @@
     loadDocument();
     return () => {
       setup.document?.destroy().then(() => {
-        documentContext.selectedPages.splice(0, documentContext.selectedPages.length);
+        documentContext.selectedPages.splice(
+          0,
+          documentContext.selectedPages.length,
+        );
         setup.metadata = undefined;
         setup.numPages = 0;
         setup.pageNumber = 1;
@@ -611,7 +666,7 @@
     documentContext.processingPages.length;
     documentContext.selectedPages.length;
     untrack(() => loadPageQueue(validPageNumber));
-    console.log('Loading page...');
+    console.log("Loading page...");
   });
 </script>
 
@@ -633,7 +688,7 @@
   >
     <div bind:this={canvasContainer} class="relative">
       <canvas
-        class={setup.numPages ? '' : 'pointer-events-none'}
+        class={setup.numPages ? "" : "pointer-events-none"}
         bind:this={renderCanvas}
       ></canvas>
       <svg class="absolute left-0 top-0" bind:this={textLayer}></svg>
@@ -659,7 +714,6 @@
       {/each}
     </div>
   {/if}
-
   <div class="absolute right-4 top-4 flex flex-col space-y-2">
     <Button
       tabindex={-1}
@@ -766,8 +820,10 @@
         tabindex={-1}
         disabled={!setup.numPages ||
           documentContext.selectedPages.length === 0 ||
-          documentContext.processingPages.some(pp => pp.pages.includes(setup.pageNumber))}
-        class={buttonVariants({ size: 'icon', className: '' })}
+          documentContext.processingPages.some((pp) =>
+            pp.pages.includes(setup.pageNumber),
+          )}
+        class={buttonVariants({ size: "icon", className: "" })}
         aria-label="Process selected pages"
       >
         <FileCheck />
@@ -776,8 +832,8 @@
         <Dialog.Header>
           <Dialog.Title>
             {documentContext.selectedPages.length > 1
-              ? 'Processar as páginas selecionadas?'
-              : 'Processar página selecionada?'}
+              ? "Processar as páginas selecionadas?"
+              : "Processar página selecionada?"}
           </Dialog.Title>
           <Dialog.Description>
             {selectedPagesText}
@@ -804,11 +860,15 @@
         handleSelectPage();
       }}
       disabled={!setup.numPages ||
-        documentContext.processingPages.some(pp => pp.pages.includes(setup.pageNumber)) ||
-        documentContext.processedDocuments.some(pp => pp.pages.includes(setup.pageNumber))}
+        documentContext.processingPages.some((pp) =>
+          pp.pages.includes(setup.pageNumber),
+        ) ||
+        documentContext.processedDocuments.some((pp) =>
+          pp.pages.includes(setup.pageNumber),
+        )}
       aria-label={documentContext.selectedPages.includes(setup.pageNumber)
-        ? 'Deselect page'
-        : 'Select page'}
+        ? "Deselect page"
+        : "Select page"}
     >
       {#if documentContext.selectedPages.includes(setup.pageNumber)}
         <FileMinus />

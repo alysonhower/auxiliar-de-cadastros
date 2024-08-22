@@ -21,6 +21,7 @@
     Eye,
     EyeOff,
     Loader2,
+    Keyboard,
   } from "lucide-svelte/icons";
   import { homeDir, resolve } from "@tauri-apps/api/path";
   import {
@@ -41,6 +42,8 @@
   } from "$lib/types";
   import { v4 as uuidv4 } from "uuid";
   import type { DocumentState } from "./documentContext.svelte";
+  import * as Collapsible from "$lib/components/ui/collapsible";
+  import { ChevronDown, ChevronUp } from "lucide-svelte/icons";
 
   const MIN_SCALE = 0.4;
   const MAX_SCALE = 10;
@@ -77,6 +80,12 @@
     showStatusCanvas: true,
     isExtractingImages: false,
   });
+
+  let isWorkflowExpanded = $state(false);
+
+  const toggleWorkflow = () => {
+    isWorkflowExpanded = !isWorkflowExpanded;
+  };
 
   const loadDocument = async () => {
     try {
@@ -436,8 +445,6 @@
   };
 
   const handleKeyDown = (e: KeyboardEvent) => {
-    if (!setup.isActive) return;
-
     if (e.key === "Escape") {
       e.preventDefault();
       if (setup.confirmProcessDialogOpen) {
@@ -446,7 +453,12 @@
       return;
     }
 
-    if (!setup.numPages) return;
+    if (e.ctrlKey && (e.key === "o" || e.key === "O")) {
+      e.preventDefault();
+      handleSelectPDF();
+      return;
+    }
+    if (!setup.isActive || !setup.numPages) return;
 
     switch (e.key) {
       case "Home":
@@ -486,11 +498,6 @@
           handleNextPage();
         }
         break;
-    }
-
-    if (e.ctrlKey && (e.key === "o" || e.key === "O")) {
-      e.preventDefault();
-      handleSelectPDF();
     }
 
     if (e.ctrlKey) {
@@ -726,7 +733,7 @@
       tick().then(() => {
         setup.showStatusCanvas = true;
       });
-    }
+    };
   });
 
   const toggleStatusCanvas = () => {
@@ -747,6 +754,64 @@
           fd.pages.includes(validPageNumber),
         )),
   );
+
+  const keyboardShortcuts = [
+    { keys: ["Home"], description: "Primeira página" },
+    { keys: ["End"], description: "Última página" },
+    { keys: ["←"], description: "Página anterior" },
+    { keys: ["→"], description: "Próxima página" },
+    { keys: ["Shift", "←"], description: "Primeira página" },
+    { keys: ["Shift", "→"], description: "Última página" },
+    { keys: ["Space"], description: "Selecionar/Deselecionar página" },
+    { keys: ["Backspace"], description: "Deselecionar última página" },
+    { keys: ["Enter"], description: "Processar páginas selecionadas" },
+    { keys: ["Tab"], description: "Próxima página" },
+    { keys: ["Shift", "Tab"], description: "Página anterior" },
+    { keys: ["Ctrl", "O"], description: "Abrir PDF" },
+    { keys: ["Ctrl", "="], description: "Aumentar zoom" },
+    { keys: ["Ctrl", "-"], description: "Diminuir zoom" },
+    { keys: ["Ctrl", "←"], description: "Girar para esquerda" },
+    { keys: ["Ctrl", "→"], description: "Girar para direita" },
+    { keys: ["Shift", "↑"], description: "Aumentar zoom" },
+    { keys: ["Shift", "↓"], description: "Diminuir zoom" },
+    { keys: ["Ctrl", "Enter"], description: "Iniciar processamento final" },
+    { keys: ["Esc"], description: "Cancelar edição de nome" },
+  ];
+
+  const workflowSchema = `
+                        ┌─────────────┐
+                        │  Abrir PDF  │
+                        └─────┬───────┘
+                              │
+                              ▼
+                      ┌───────────────────┐
+                      │ Selecionar Páginas│
+                      └─────────┬─────────┘
+                                │
+                                ▼
+                      ┌───────────────────┐
+                      │    Processar      │
+                      │     Páginas       │
+                      └─────────┬─────────┘
+                                │
+                                ▼
+                      ┌───────────────────┐
+                      │  Nome Sugerido    │
+                      │   para Arquivo    │
+                      └─────────┬─────────┘
+                                │
+                          ┌─────┴─────┐
+                          ▼           ▼
+                      ┌─────────┐ ┌─────────┐
+                      │  Editar │ │  Salvar │
+                      │  Nome   │ │  Nome   │
+                      └─────────┘ └─────────┘
+`;
+
+  let showShortcuts = $state(false);
+  const toggleShortcuts = () => {
+    showShortcuts = !showShortcuts;
+  };
 </script>
 
 <svelte:window
@@ -990,4 +1055,63 @@
       {/if}
     </Button>
   </div>
+
+  <div class="absolute top-1/2 left-4 -translate-y-1/2 z-10">
+    <Button
+      tabindex={-1}
+      size="icon"
+      variant="default"
+      onclick={toggleShortcuts}
+      aria-label={showShortcuts
+        ? "Hide keyboard shortcuts"
+        : "Show keyboard shortcuts"}
+    >
+      <Keyboard class="h-4 w-4" />
+    </Button>
+  </div>
+
+  {#if showShortcuts}
+    <div
+      class="absolute left-16 top-1/2 -translate-y-1/2 bg-background p-4 rounded-lg shadow-lg max-w-lg max-h-[80vh] overflow-y-auto z-20"
+    >
+      <h3 class="text-lg font-semibold mb-2 text-primary">Teclas de Atalho</h3>
+      <div class="grid grid-cols-2 gap-2">
+        {#each keyboardShortcuts as shortcut}
+          <div class="flex items-center">
+            <div class="flex-shrink-0">
+              {#each shortcut.keys as key, index}
+                <kbd class="kbd kbd-sm bg-secondary text-primary">{key}</kbd>
+                {#if index < shortcut.keys.length - 1}
+                  <span class="mx-1 text-gray-500">+</span>
+                {/if}
+              {/each}
+            </div>
+            <span class="ml-2 text-sm">{shortcut.description}</span>
+          </div>
+        {/each}
+      </div>
+      <Collapsible.Root>
+        <Collapsible.Trigger
+          tabindex={-1}
+          class="flex items-center justify-between w-full text-md font-semibold mb-2 mt-4 text-primary"
+          onclick={toggleWorkflow}
+        >
+          Fluxo de Trabalho
+          {#if isWorkflowExpanded}
+            <ChevronUp class="h-4 w-4" />
+          {:else}
+            <ChevronDown class="h-4 w-4" />
+          {/if}
+        </Collapsible.Trigger>
+        <Collapsible.Content>
+          <div class="max-h-60 overflow-y-auto">
+            <pre
+              class="text-xs text-primary bg-secondary p-2 rounded-md overflow-x-auto whitespace-pre">
+              {workflowSchema}
+            </pre>
+          </div>
+        </Collapsible.Content>
+      </Collapsible.Root>
+    </div>
+  {/if}
 </div>

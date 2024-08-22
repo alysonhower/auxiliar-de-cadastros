@@ -66,7 +66,7 @@
     | (ProcessedDocument & { listType: "processed" })
     | (FinishedDocument & { listType: "finished" });
 
-  const allDocuments: AllDocumentTypes[] = $derived(
+  const allDocuments = $derived(
     [
       ...documentContext.processingPages.map((doc) => ({
         ...doc,
@@ -81,7 +81,7 @@
         ...doc,
         listType: "finished" as const,
       })),
-    ].sort((a, b) => getMinPageNumber(a.pages) - getMinPageNumber(b.pages)),
+    ].sort((a, b) => Math.min(...a.pages) - Math.min(...b.pages)),
   );
 
   const setMapValue = (map: Map<string, any>, id: string, value: any) => {
@@ -151,7 +151,6 @@
       }
       console.log("Updated document info:", updatedDocumentInfo);
 
-      // Ensure file_name_history exists and add the new name if it's not already there
       if (!updatedDocumentInfo.file_name_history) {
         updatedDocumentInfo.file_name_history = [];
       }
@@ -159,7 +158,6 @@
         updatedDocumentInfo.file_name_history.push(editedFileName);
       }
 
-      // Update the document in the appropriate array
       if (document.listType === "finished") {
         documentContext.finishedDocuments =
           documentContext.finishedDocuments.map((doc) =>
@@ -207,17 +205,26 @@
     else if (event.key === "Escape") cancelEditing();
   };
 
-  const elapsedTimes = $derived.by(() => {
-    let times = [];
-    for (const page of documentContext.processingPages) {
-      page.elapsed = time.getTime() - page.startTime;
-      times.push({
-        id: page.id,
-        elapsed: formatDurationText(page.startTime),
-      });
-    }
-    return times;
-  });
+  const elapsedTimes = $derived(
+    documentContext.processingPages.map((page) => ({
+      id: page.id,
+      elapsed: formatDurationText(page.startTime, time.getTime()),
+    })),
+  );
+
+  const removeFromProcessed = (document: AllDocumentTypes) => {
+    documentContext.processedDocuments =
+      documentContext.processedDocuments.filter(
+        (doc) => doc.id !== document.id,
+      );
+  };
+
+  const addToProcessing = (document: AllDocumentTypes) => {
+    documentContext.processingPages = [
+      ...documentContext.processingPages,
+      { ...document, status: "processing", startTime: Date.now() },
+    ];
+  };
 
   const isProcessedOrFinished = (
     doc: AllDocumentTypes,
@@ -228,26 +235,12 @@
   const handleFinalPipeline = async (document: AllDocumentTypes) => {
     if (!isProcessedOrFinished(document)) return;
     setConfirmProcessDialogOpen(document.id, false);
-    documentContext.processedDocuments =
-      documentContext.processedDocuments.filter(
-        (doc) => doc.id !== document.id,
-      );
-    documentContext.processingPages = [
-      ...documentContext.processingPages,
-      {
-        ...document,
-        status: "processing",
-        startTime: Date.now(),
-      },
-    ];
+
+    removeFromProcessed(document);
+    addToProcessing(document);
 
     try {
-      await invoke("final_pipeline", {
-        documentInfo: document.info,
-      });
-      documentContext.processingPages = documentContext.processingPages.filter(
-        (page) => page.id !== document.id,
-      );
+      await invoke("final_pipeline", { documentInfo: document.info });
       document.status = "completed";
       document.endTime = Date.now();
       documentContext.finishedDocuments = [
@@ -256,15 +249,16 @@
       ];
     } catch (error) {
       console.error("Error in final pipeline:", error);
-      documentContext.processingPages = documentContext.processingPages.filter(
-        (page) => page.id !== document.id,
-      );
       document.status = "error";
       document.error = error instanceof Error ? error.message : String(error);
       documentContext.processedDocuments = [
         ...documentContext.processedDocuments,
         document,
       ];
+    } finally {
+      documentContext.processingPages = documentContext.processingPages.filter(
+        (page) => page.id !== document.id,
+      );
     }
   };
 
@@ -348,10 +342,6 @@
     }
   };
 
-  const getMinPageNumber = (pages: number[]): number => {
-    return Math.min(...pages);
-  };
-
   const isCurrentPage = (document: AllDocumentTypes) => {
     return document.pages.includes(documentContext.currentPageNumber);
   };
@@ -383,14 +373,21 @@
     }
   };
 
-  $effect(() => {
-    const interval = setInterval(() => (time = new Date()), 1000);
-    return () => clearInterval(interval);
-  });
+  const getRingStyle = (document: AllDocumentTypes): string => {
+    if (document.listType === "finished") {
+      return "ring-4 ring-[rgba(0,128,0,1)]";
+    } else if (document.listType === "processed") {
+      return "ring-4 ring-[rgba(186,79,125,1)]";
+    } else {
+      return "ring-4 ring-[rgba(255,165,0,0.8)]";
+    }
+  }
 
   $effect(() => {
+    const interval = setInterval(() => (time = new Date()), 1000);
     window.addEventListener("keydown", handleGlobalKeydown);
     return () => {
+      clearInterval(interval);
       window.removeEventListener("keydown", handleGlobalKeydown);
     };
   });
@@ -406,7 +403,7 @@
     {#each allDocuments as document (document.id)}
       <Card.Root
         class="p-3 max-h-[50vh] flex flex-col {isCurrentPage(document)
-          ? 'ring-2 ring-primary'
+          ? getRingStyle(document)
           : ''}"
         tabindex={isCurrentPage(document) ? 0 : -1}
       >

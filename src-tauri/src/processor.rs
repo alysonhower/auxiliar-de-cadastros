@@ -9,13 +9,22 @@ use tauri_plugin_shell::{process::CommandEvent, ShellExt};
 pub async fn final_pipeline(
     handle: tauri::AppHandle,
     document_info: DocumentInfo,
-) -> Result<(), ()> {
+) -> Result<(), String> {
     let parent_dir = Path::new(&document_info.json_file_path).parent().expect("Failed to get parent directory");
     let re = Regex::new(r"(.+)-data$").unwrap();
     let original_file = re.replace(&parent_dir.to_string_lossy(), "$1").to_string();
     let original_file = Path::new(&original_file).with_extension("pdf");
+    let done_dir = parent_dir.join("done");
 
-    let save_path = parent_dir.join(document_info.file_name).with_extension("pdf");
+    if !done_dir.exists() {
+        std::fs::create_dir_all(&done_dir).map_err(|_| "Failed to create done directory")?;
+    }
+
+    let save_path = done_dir.join(document_info.file_name).with_extension("pdf");
+
+    if save_path.exists() {
+        std::fs::remove_file(&save_path).map_err(|_| "Failed to delete file")?;
+    }
 
     let mut pages = vec![];
 
@@ -58,7 +67,7 @@ pub async fn final_pipeline(
             ],
         ).await;
         if !success {
-            return Err(());
+            return Err("Failed to call utility".to_string());
         }
     }
 
@@ -110,4 +119,12 @@ fn extract_page_number(input: &str) -> &str {
     re.captures(input)
         .and_then(|caps| caps.get(1).map(|m| m.as_str()))
         .unwrap_or("unidentified")
+}
+
+#[tauri::command]
+pub fn open_in_explorer(path: &str) -> Result<(), String> {
+    let mut command = std::process::Command::new("explorer");
+    command.args(&["/select,", path]);
+    command.spawn().map_err(|_| "Failed to open in explorer")?;
+    Ok(())
 }

@@ -7,8 +7,9 @@
     Check,
     X,
     History,
-    FileCheck,
     RefreshCw,
+    CheckCheck,
+    FolderOpen,
   } from "lucide-svelte/icons";
   import { v4 as uuidv4 } from "uuid";
 
@@ -23,6 +24,7 @@
     DocumentInfo,
     ProcessedDocument,
     ProcessingPage,
+    FinishedDocument,
   } from "$lib/types";
   import type { DocumentState } from "./documentContext.svelte";
 
@@ -59,6 +61,29 @@
   let historyHoverTimeoutMap = $state(new Map<string, NodeJS.Timeout>());
   let confirmProcessDialogOpenMap = $state(new Map<string, boolean>());
 
+  type AllDocumentTypes =
+    | (ProcessingPage & { listType: "processing"; info: DocumentInfo })
+    | (ProcessedDocument & { listType: "processed" })
+    | (FinishedDocument & { listType: "finished" });
+
+  const allDocuments: AllDocumentTypes[] = $derived(
+    [
+      ...documentContext.processingPages.map((doc) => ({
+        ...doc,
+        listType: "processing" as const,
+        info: {} as DocumentInfo,
+      })),
+      ...documentContext.processedDocuments.map((doc) => ({
+        ...doc,
+        listType: "processed" as const,
+      })),
+      ...documentContext.finishedDocuments.map((doc) => ({
+        ...doc,
+        listType: "finished" as const,
+      })),
+    ].sort((a, b) => getMinPageNumber(a.pages) - getMinPageNumber(b.pages)),
+  );
+
   const setMapValue = (map: Map<string, any>, id: string, value: any) => {
     return new Map(map).set(id, value);
   };
@@ -90,21 +115,75 @@
     }
   };
 
-  const startEditing = (document: ProcessedDocument) => {
+  const startEditing = (
+    document:
+      | (ProcessedDocument & { listType: "processed" })
+      | (FinishedDocument & { listType: "finished" }),
+  ) => {
     editingDocumentId = document.id;
     editedFileName = document.file_name;
   };
 
-  const saveFileName = async (document: ProcessedDocument) => {
+  const saveFileName = async (
+    document:
+      | (ProcessedDocument & { listType: "processed" })
+      | (FinishedDocument & { listType: "finished" }),
+  ) => {
     if (!editedFileName.trim()) return;
 
     try {
-      const updatedDocumentInfo = await invoke("update_file_name", {
-        path: document.json_file_path,
-        name: editedFileName,
-      });
-      document.file_name = editedFileName;
-      document.info = updatedDocumentInfo as DocumentInfo;
+      let updatedDocumentInfo: DocumentInfo;
+      if (document.listType === "finished") {
+        console.log(
+          "Renaming finished document:",
+          "json path: " + document.info.json_file_path,
+          "new name: " + editedFileName,
+        );
+        updatedDocumentInfo = await invoke("rename_finished_document", {
+          oldPath: document.info.json_file_path,
+          newName: editedFileName,
+        });
+      } else {
+        updatedDocumentInfo = await invoke("update_file_name", {
+          path: document.json_file_path,
+          name: editedFileName,
+        });
+      }
+      console.log("Updated document info:", updatedDocumentInfo);
+
+      // Ensure file_name_history exists and add the new name if it's not already there
+      if (!updatedDocumentInfo.file_name_history) {
+        updatedDocumentInfo.file_name_history = [];
+      }
+      if (!updatedDocumentInfo.file_name_history.includes(editedFileName)) {
+        updatedDocumentInfo.file_name_history.push(editedFileName);
+      }
+
+      // Update the document in the appropriate array
+      if (document.listType === "finished") {
+        documentContext.finishedDocuments =
+          documentContext.finishedDocuments.map((doc) =>
+            doc.id === document.id
+              ? {
+                  ...doc,
+                  file_name: updatedDocumentInfo.file_name,
+                  info: updatedDocumentInfo,
+                }
+              : doc,
+          );
+      } else {
+        documentContext.processedDocuments =
+          documentContext.processedDocuments.map((doc) =>
+            doc.id === document.id
+              ? {
+                  ...doc,
+                  file_name: updatedDocumentInfo.file_name,
+                  info: updatedDocumentInfo,
+                }
+              : doc,
+          );
+      }
+
       showHistoryMap = setMapValue(showHistoryMap, document.id, false);
     } catch (error) {
       console.error("Error updating file name:", error);
@@ -120,7 +199,9 @@
 
   const handleKeyDown = async (
     event: KeyboardEvent,
-    document: ProcessedDocument,
+    document:
+      | (ProcessedDocument & { listType: "processed" })
+      | (FinishedDocument & { listType: "finished" }),
   ) => {
     if (event.key === "Enter") await saveFileName(document);
     else if (event.key === "Escape") cancelEditing();
@@ -138,8 +219,14 @@
     return times;
   });
 
-  const handleFinalPipeline = async (document: ProcessedDocument) => {
-    if (documentContext.processingPages.some(page => page.id === document.id)) return;
+  const isProcessedOrFinished = (
+    doc: AllDocumentTypes,
+  ): doc is (ProcessedDocument | FinishedDocument) & {
+    listType: "processed" | "finished";
+  } => doc.listType === "processed" || doc.listType === "finished";
+
+  const handleFinalPipeline = async (document: AllDocumentTypes) => {
+    if (!isProcessedOrFinished(document)) return;
     setConfirmProcessDialogOpen(document.id, false);
     documentContext.processedDocuments =
       documentContext.processedDocuments.filter(
@@ -182,14 +269,19 @@
   };
 
   const setConfirmProcessDialogOpen = (id: string, isOpen: boolean) => {
-    confirmProcessDialogOpenMap = new Map(confirmProcessDialogOpenMap).set(id, isOpen);
+    confirmProcessDialogOpenMap = new Map(confirmProcessDialogOpenMap).set(
+      id,
+      isOpen,
+    );
   };
 
   const isConfirmProcessDialogOpen = (id: string) => {
     return confirmProcessDialogOpenMap.get(id) || false;
   };
 
-  const handleRetry = async (document: ProcessedDocument) => {
+  const handleRetry = async (document: AllDocumentTypes) => {
+    if (document.listType !== "processed") return; // Only processed documents can be retried
+
     const newProcess: ProcessingPage = {
       id: uuidv4(),
       pages: [...document.pages],
@@ -213,8 +305,11 @@
         paths: newProcess.pages_paths,
       });
 
-      const newProcessedDocument: ProcessedDocument = {
+      const newProcessedDocument: ProcessedDocument & {
+        listType: "processed";
+      } = {
         ...newProcess,
+        listType: "processed",
         file_name: res.file_name,
         json_file_path: res.json_file_path,
         info: {
@@ -230,8 +325,11 @@
       ];
     } catch (err) {
       console.error("Error in anthropic_pipeline:", err);
-      const errorProcessedDocument: ProcessedDocument = {
+      const errorProcessedDocument: ProcessedDocument & {
+        listType: "processed";
+      } = {
         ...newProcess,
+        listType: "processed",
         file_name: "",
         json_file_path: "",
         info: {} as DocumentInfo,
@@ -254,20 +352,34 @@
     return Math.min(...pages);
   };
 
-  const isCurrentPage = (
-    document: ProcessingPage | ProcessedDocument | ProcessedDocument,
-  ) => {
+  const isCurrentPage = (document: AllDocumentTypes) => {
     return document.pages.includes(documentContext.currentPageNumber);
   };
 
   const handleGlobalKeydown = (event: KeyboardEvent) => {
-    if (event.ctrlKey && event.key === 'Enter') {
-      const currentDocument = [...documentContext.processedDocuments, ...documentContext.finishedDocuments]
-        .find(doc => isCurrentPage(doc));
+    if (event.ctrlKey && event.key === "Enter") {
+      const currentDocument = allDocuments.find(
+        (doc) => isCurrentPage(doc) && isProcessedOrFinished(doc),
+      );
       if (currentDocument) {
         event.preventDefault();
         setConfirmProcessDialogOpen(currentDocument.id, true);
       }
+    }
+  };
+
+  const openInExplorer = async (document: FinishedDocument) => {
+    try {
+      const fullPath =
+        document.info.json_file_path
+          .replace(/(.+)-data(\\|\/)[^\\\/]+\.json$/, "$1-data\\done\\")
+          .replace(/\//g, "\\") +
+        document.file_name +
+        ".pdf";
+      console.log(fullPath);
+      await invoke("open_in_explorer", { path: fullPath });
+    } catch (error) {
+      console.error("Error opening file in explorer:", error);
     }
   };
 
@@ -277,21 +389,9 @@
   });
 
   $effect(() => {
-    documentContext.processingPages.sort(
-      (a, b) => getMinPageNumber(a.pages) - getMinPageNumber(b.pages),
-    );
-    documentContext.processedDocuments.sort(
-      (a, b) => getMinPageNumber(a.pages) - getMinPageNumber(b.pages),
-    );
-    documentContext.finishedDocuments.sort(
-      (a, b) => getMinPageNumber(a.pages) - getMinPageNumber(b.pages),
-    );
-  });
-
-  $effect(() => {
-    window.addEventListener('keydown', handleGlobalKeydown);
+    window.addEventListener("keydown", handleGlobalKeydown);
     return () => {
-      window.removeEventListener('keydown', handleGlobalKeydown);
+      window.removeEventListener("keydown", handleGlobalKeydown);
     };
   });
 </script>
@@ -303,244 +403,213 @@
     Status do processamento
   </h1>
   <div class="flex h-full w-full flex-col gap-4">
-    {#each documentContext.processingPages as processingPage}
+    {#each allDocuments as document (document.id)}
       <Card.Root
-        class="p-3 max-h-[50vh] flex flex-col {isCurrentPage(processingPage)
+        class="p-3 max-h-[50vh] flex flex-col {isCurrentPage(document)
           ? 'ring-2 ring-primary'
           : ''}"
-      >
-        <Card.Header class="pb-1 flex-shrink-0">
-          <Card.Title class="text-sm">
-            <span class="font-semibold text-primary break-all">
-              Processando ({processingPage.pages.length > 1
-                ? "páginas"
-                : "página"}: {formatPagesText(processingPage.pages)})
-            </span>
-          </Card.Title>
-        </Card.Header>
-        <Separator class="mt-1.5 bg-secondary mb-3 flex-shrink-0" />
-        <Card.Content class="space-y-1 text-xs overflow-y-auto">
-          <p>
-            <span class="font-semibold text-primary">Status:</span>
-            {translateStatusText(processingPage.status)}
-          </p>
-          <p>
-            <span class="font-semibold text-primary">Tempo decorrido:</span>
-            {#key time}<span
-                >{elapsedTimes.find((t) => t.id === processingPage.id)
-                  ?.elapsed}</span
-              >{/key}
-          </p>
-          <p>
-            <span class="font-semibold text-primary">Início:</span>
-            {new Date(processingPage.startTime).toLocaleString()}
-          </p>
-          {#if processingPage.error}
-            <p class="text-red-500">
-              <span class="font-semibold">Erro:</span>
-              {processingPage.error}
-            </p>
-          {/if}
-        </Card.Content>
-      </Card.Root>
-    {/each}
-
-    {#each documentContext.processedDocuments as processedDocument}
-      <Card.Root
-        class="p-3 max-h-[50vh] flex flex-col {isCurrentPage(processedDocument)
-          ? 'ring-2 ring-primary'
-          : ''}"
-        tabindex={isCurrentPage(processedDocument) ? 0 : -1}
+        tabindex={isCurrentPage(document) ? 0 : -1}
       >
         <Card.Header class="pb-1 flex-shrink-0">
           <Card.Title class="flex flex-col gap-1 text-sm">
             <span class="font-semibold text-primary break-all">
-              Nome sugerido (página: {formatPagesText(
-                processedDocument.pages,
-              )}):
+              {#if document.listType === "processing"}
+                Processando ({document.pages.length > 1 ? "páginas" : "página"}: {formatPagesText(
+                  document.pages,
+                )})
+              {:else if document.listType === "finished"}
+                Documento Finalizado:
+              {:else}
+                Nome sugerido (página: {formatPagesText(document.pages)}):
+              {/if}
             </span>
-            {#if editingDocumentId === processedDocument.id}
-              <div class="w-full h-full space-y-1">
-                <!-- svelte-ignore a11y_autofocus -->
-                <div
-                  class="w-full p-2 border rounded-md font-semibold text-sm focus:outline-none focus:ring-1 focus:ring-primary break-all min-h-[1.5em] max-h-[50vh] overflow-y-auto"
-                  contenteditable="true"
-                  bind:textContent={editedFileName}
-                  onkeydown={(e) => handleKeyDown(e, processedDocument)}
-                  onfocus={(e) => {
-                    if (e.target instanceof Node) {
-                      const range = document.createRange();
-                      range.selectNodeContents(e.target);
-                      const selection = window.getSelection();
-                      selection?.removeAllRanges();
-                      selection?.addRange(range);
-                    }
-                  }}
-                  role="textbox"
-                  tabindex="0"
-                  autofocus
-                ></div>
-                <div class="flex justify-end space-x-1">
-                  <Button
-                    size="icon"
-                    variant="default"
-                    onclick={() => saveFileName(processedDocument)}
-                    disabled={!editedFileName.trim()}
-                    class="h-7 w-7"
-                  >
-                    <Check class="h-3.5 w-3.5" />
-                  </Button>
-                  <Button
-                    size="icon"
-                    variant="default"
-                    onclick={cancelEditing}
-                    class="h-7 w-7"
-                  >
-                    <X class="h-3.5 w-3.5" />
-                  </Button>
-                </div>
-              </div>
-            {:else}
-              <span class="break-all w-full font-semibold text-sm mb-1">
-                {processedDocument.file_name ||
-                  "Talvez tenha acontecido um erro, verifique as informações geradas logo abaixo"}
-              </span>
-              <div class="flex justify-end space-x-1 relative">
-                <div class="relative">
-                  {#if processedDocument.info?.file_name_history && processedDocument.info.file_name_history.length > 1}
-                    <!-- svelte-ignore a11y_no_static_element_interactions -->
-                    <div
-                      class="absolute right-full transition-all duration-300 ease-in-out transform"
-                      class:translate-x-[100%]={!showHistoryMap.get(
-                        processedDocument.id,
-                      )}
-                      class:opacity-0={!showHistoryMap.get(
-                        processedDocument.id,
-                      )}
-                      class:pointer-events-none={!showHistoryMap.get(
-                        processedDocument.id,
-                      )}
-                      onmouseenter={() =>
-                        handleHistoryInteraction(processedDocument.id, true)}
-                      onmouseleave={() =>
-                        handleHistoryInteraction(processedDocument.id, false)}
+            {#if document.listType !== "processing"}
+              {#if editingDocumentId === document.id}
+                <div class="w-full h-full space-y-1">
+                  <!-- svelte-ignore a11y_autofocus -->
+                  <div
+                    class="w-full p-2 border rounded-md font-semibold text-sm focus:outline-none focus:ring-1 focus:ring-primary break-all min-h-[1.5em] max-h-[50vh] overflow-y-auto"
+                    contenteditable="true"
+                    bind:textContent={editedFileName}
+                    onkeydown={(e) => handleKeyDown(e, document)}
+                    onfocus={(e) => {
+                      if (e.target instanceof Node) {
+                        const range = window.document.createRange();
+                        range.selectNodeContents(e.target);
+                        const selection = window.getSelection();
+                        selection?.removeAllRanges();
+                        selection?.addRange(range);
+                      }
+                    }}
+                    role="textbox"
+                    tabindex="0"
+                    autofocus
+                  ></div>
+                  <div class="flex justify-end space-x-1">
+                    <Button
+                      size="icon"
+                      variant="default"
+                      onclick={() => saveFileName(document)}
+                      disabled={!editedFileName.trim()}
+                      class="h-7 w-7"
                     >
-                      <DropdownMenu.Root
-                        open={isDropdownOpenMap.get(processedDocument.id)}
+                      <Check class="h-3.5 w-3.5" />
+                    </Button>
+                    <Button
+                      size="icon"
+                      variant="default"
+                      onclick={cancelEditing}
+                      class="h-7 w-7"
+                    >
+                      <X class="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                </div>
+              {:else}
+                <span class="break-all w-full font-semibold text-sm mb-1">
+                  {document.file_name}
+                </span>
+                <div class="flex justify-end space-x-1 relative">
+                  <div class="relative">
+                    {#if document.info?.file_name_history && document.info.file_name_history.length > 1}
+                      <!-- svelte-ignore a11y_no_static_element_interactions -->
+                      <div
+                        class="absolute right-full transition-all duration-300 ease-in-out transform"
+                        class:translate-x-[100%]={!showHistoryMap.get(
+                          document.id,
+                        )}
+                        class:opacity-0={!showHistoryMap.get(document.id)}
+                        class:pointer-events-none={!showHistoryMap.get(
+                          document.id,
+                        )}
+                        onmouseenter={() =>
+                          handleHistoryInteraction(document.id, true)}
+                        onmouseleave={() =>
+                          handleHistoryInteraction(document.id, false)}
                       >
-                        <DropdownMenu.Trigger asChild let:builder>
-                          <Button
-                            size="icon"
-                            variant="default"
-                            builders={[builder]}
-                            class="h-7 w-7 mr-1"
-                          >
-                            <History class="h-3.5 w-3.5" />
-                          </Button>
-                        </DropdownMenu.Trigger>
-                        <DropdownMenu.Content
-                          class="w-96 max-w-[90vw] max-h-60 overflow-hidden flex flex-col"
-                          onmouseenter={() =>
-                            handleHistoryInteraction(
-                              processedDocument.id,
-                              true,
-                            )}
-                          onmouseleave={() =>
-                            handleHistoryInteraction(
-                              processedDocument.id,
-                              false,
-                            )}
+                        <DropdownMenu.Root
+                          open={isDropdownOpenMap.get(document.id)}
                         >
-                          <div
-                            class="sticky top-0 bg-background z-10 py-1.5 px-2"
-                          >
-                            <DropdownMenu.Label
-                              >Histórico de nomes</DropdownMenu.Label
+                          <DropdownMenu.Trigger asChild let:builder>
+                            <Button
+                              size="icon"
+                              variant="default"
+                              builders={[builder]}
+                              class="h-7 w-7 mr-1"
                             >
-                            <DropdownMenu.Separator />
-                          </div>
-                          <div class="overflow-y-auto">
-                            {#each processedDocument.info.file_name_history.slice() as historyItem}
-                              <DropdownMenu.Item
-                                onclick={() => {
-                                  editedFileName = historyItem;
-                                  saveFileName(processedDocument);
-                                  isDropdownOpenMap = setMapValue(
-                                    isDropdownOpenMap,
-                                    processedDocument.id,
-                                    false,
-                                  );
-                                }}
-                                class="break-all cursor-pointer"
+                              <History class="h-3.5 w-3.5" />
+                            </Button>
+                          </DropdownMenu.Trigger>
+                          {#key document.info.file_name_history}
+                            <DropdownMenu.Content
+                              class="w-96 max-w-[90vw] max-h-60 overflow-hidden flex flex-col"
+                              onmouseenter={() =>
+                                handleHistoryInteraction(document.id, true)}
+                              onmouseleave={() =>
+                                handleHistoryInteraction(document.id, false)}
+                            >
+                              <div
+                                class="sticky top-0 bg-background z-10 py-1.5 px-2"
                               >
-                                {historyItem}
-                                {historyItem === processedDocument.file_name
-                                  ? "(nome atual)"
-                                  : ""}
-                              </DropdownMenu.Item>
-                            {/each}
-                          </div>
-                        </DropdownMenu.Content>
-                      </DropdownMenu.Root>
-                    </div>
-                  {/if}
-                  <Button
-                    size="icon"
-                    variant="default"
-                    onclick={() => startEditing(processedDocument)}
-                    class="h-7 w-7 relative z-10"
-                    onmouseenter={() =>
-                      handleEditButtonInteraction(processedDocument.id, true)}
-                    onmouseleave={() =>
-                      handleEditButtonInteraction(processedDocument.id, false)}
-                  >
-                    <Pencil class="h-3.5 w-3.5" />
-                  </Button>
-
-                  <Dialog.Root
-                    open={isConfirmProcessDialogOpen(processedDocument.id)}
-                    onOpenChange={(open) =>
-                      setConfirmProcessDialogOpen(processedDocument.id, open)}
-                  >
-                    <Dialog.Trigger
-                      tabindex={-1}
-                      disabled={showHistoryMap.get(processedDocument.id) ||
-                        editingDocumentId === processedDocument.id}
-                      class={buttonVariants({
-                        size: "icon",
-                        className: "h-7 w-7",
-                      })}
-                      aria-label="Process selected pages"
+                                <DropdownMenu.Label
+                                  >Histórico de nomes</DropdownMenu.Label
+                                >
+                                <DropdownMenu.Separator />
+                              </div>
+                              <div class="overflow-y-auto">
+                                {#each document.info.file_name_history
+                                  .slice()
+                                  .reverse() as historyItem}
+                                  <DropdownMenu.Item
+                                    onclick={() => {
+                                      editedFileName = historyItem;
+                                      saveFileName(document);
+                                      isDropdownOpenMap = setMapValue(
+                                        isDropdownOpenMap,
+                                        document.id,
+                                        false,
+                                      );
+                                    }}
+                                    class="break-all cursor-pointer"
+                                  >
+                                    {historyItem}
+                                    {historyItem === document.file_name
+                                      ? " (nome atual)"
+                                      : ""}
+                                  </DropdownMenu.Item>
+                                {/each}
+                              </div>
+                            </DropdownMenu.Content>
+                          {/key}
+                        </DropdownMenu.Root>
+                      </div>
+                    {/if}
+                    <Button
+                      size="icon"
+                      variant="default"
+                      onclick={() => startEditing(document)}
+                      class="h-7 w-7 relative z-10"
+                      onmouseenter={() =>
+                        handleEditButtonInteraction(document.id, true)}
+                      onmouseleave={() =>
+                        handleEditButtonInteraction(document.id, false)}
                     >
-                      <FileCheck class="h-3.5 w-3.5" />
-                    </Dialog.Trigger>
-                    <Dialog.Content class="sm:max-w-[425px]">
-                      <Dialog.Header>
-                        <Dialog.Title>
-                          {processedDocument.pages.length > 1
-                            ? "Processar as páginas selecionadas?"
-                            : "Processar página selecionada?"}
-                        </Dialog.Title>
-                        <Dialog.Description>
-                          Você está prestes a processar {processedDocument.pages
-                            .length > 1
-                            ? "as páginas"
-                            : "a página"}
-                          {formatPagesText(processedDocument.pages)}. Deseja
-                          continuar?
-                        </Dialog.Description>
-                      </Dialog.Header>
-                      <Dialog.Footer>
-                        <Button
-                          onclick={() => handleFinalPipeline(processedDocument)}
+                      <Pencil class="h-3.5 w-3.5" />
+                    </Button>
+                    {#if document.listType === "finished"}
+                      <Button
+                        size="icon"
+                        variant="default"
+                        onclick={() => openInExplorer(document)}
+                        class="h-7 w-7"
+                      >
+                        <FolderOpen class="h-3.5 w-3.5" />
+                      </Button>
+                    {:else if document.listType === "processed"}
+                      <Dialog.Root
+                        open={isConfirmProcessDialogOpen(document.id)}
+                        onOpenChange={(open) =>
+                          setConfirmProcessDialogOpen(document.id, open)}
+                      >
+                        <Dialog.Trigger
+                          tabindex={-1}
+                          class={buttonVariants({
+                            size: "icon",
+                            className: "h-7 w-7",
+                          })}
+                          aria-label="Process selected pages"
                         >
-                          Processar
-                        </Button>
-                      </Dialog.Footer>
-                    </Dialog.Content>
-                  </Dialog.Root>
+                          <CheckCheck class="h-3.5 w-3.5" />
+                        </Dialog.Trigger>
+                        <Dialog.Content class="sm:max-w-[425px]">
+                          <Dialog.Header>
+                            <Dialog.Title>
+                              {document.pages.length > 1
+                                ? "Processar as páginas selecionadas?"
+                                : "Processar página selecionada?"}
+                            </Dialog.Title>
+                            <Dialog.Description>
+                              Você está prestes a processar {document.pages
+                                .length > 1
+                                ? "as páginas"
+                                : "a página"}
+                              {formatPagesText(document.pages)}. Deseja
+                              continuar?
+                            </Dialog.Description>
+                          </Dialog.Header>
+                          <Dialog.Footer>
+                            <Button
+                              onclick={() => handleFinalPipeline(document)}
+                            >
+                              Processar
+                            </Button>
+                          </Dialog.Footer>
+                        </Dialog.Content>
+                      </Dialog.Root>
+                    {/if}
+                  </div>
                 </div>
-              </div>
+              {/if}
             {/if}
           </Card.Title>
         </Card.Header>
@@ -548,26 +617,42 @@
         <Card.Content class="space-y-1 text-xs overflow-y-auto">
           <p>
             <span class="font-semibold text-primary">Status:</span>
-            {translateStatusText(processedDocument.status)}
+            {document.listType === "finished"
+              ? "Finalizado"
+              : translateStatusText(document.status)}
           </p>
-          <p>
-            <span class="font-semibold text-primary"
-              >Tempo de processamento:</span
-            >
-            {formatDurationText(
-              processedDocument.startTime,
-              processedDocument.endTime,
-            )}
-          </p>
-          {#if processedDocument.status === "error"}
+          {#if document.listType === "processing"}
+            <p>
+              <span class="font-semibold text-primary">Tempo decorrido:</span>
+              {#key time}<span
+                  >{elapsedTimes.find((t) => t.id === document.id)
+                    ?.elapsed}</span
+                >{/key}
+            </p>
+          {:else}
+            <p>
+              <span class="font-semibold text-primary"
+                >Tempo de processamento:</span
+              >
+              {formatDurationText(document.startTime, document.endTime)}
+            </p>
+          {/if}
+          {#if document.listType === "finished"}
+            <p>
+              <span class="font-semibold text-primary">Páginas:</span>
+              {formatPagesText(document.pages)}
+            </p>
+          {/if}
+          {#if document.status === "error"}
             <p class="text-red-500">
               <span class="font-semibold">Erro:</span>
-              {processedDocument.error}
+              {document.error}
             </p>
             <Button
               size="sm"
               variant="outline"
-              onclick={() => handleRetry(processedDocument)}
+              onclick={() =>
+                document.listType === "processed" && handleRetry(document)}
               class="mt-2"
             >
               <RefreshCw class="h-3.5 w-3.5 mr-1" />
@@ -585,94 +670,26 @@
             <Collapsible.Content class="mt-1.5 space-y-1">
               <p>
                 <span class="font-semibold text-primary">ID:</span>
-                {processedDocument.id}
+                {document.id}
               </p>
               <p>
                 <span class="font-semibold text-primary">Início:</span>
-                {new Date(processedDocument.startTime).toLocaleString()}
+                {new Date(document.startTime).toLocaleString()}
               </p>
               <p>
                 <span class="font-semibold text-primary">Fim:</span>
-                {new Date(processedDocument.endTime!).toLocaleString()}
+                {new Date(document.endTime!).toLocaleString()}
               </p>
-              {#if processedDocument.error}
+              {#if document.error}
                 <p class="text-red-500">
                   <span class="font-semibold">Erro:</span>
-                  {processedDocument.error}
+                  {document.error}
                 </p>
               {/if}
               <p class="font-semibold text-primary">info:</p>
               <pre
                 class="text-wrap w-full max-w-full overflow-x-auto whitespace-pre-wrap break-words text-[10px]">
-                {JSON.stringify(processedDocument.info, null, 2)}
-              </pre>
-            </Collapsible.Content>
-          </Collapsible.Root>
-        </Card.Content>
-      </Card.Root>
-    {/each}
-
-    {#each documentContext.finishedDocuments as finishedDocument}
-      <Card.Root
-        class="p-3 max-h-[50vh] flex flex-col {isCurrentPage(finishedDocument)
-          ? 'ring-2 ring-primary'
-          : ''}"
-        tabindex={isCurrentPage(finishedDocument) ? 0 : -1}
-      >
-        <Card.Header class="pb-1 flex-shrink-0">
-          <Card.Title class="flex flex-col gap-1 text-sm">
-            <span class="font-semibold text-primary break-all">
-              Documento Finalizado:
-            </span>
-            <span class="break-all w-full font-semibold text-sm mb-1">
-              {finishedDocument.file_name}
-            </span>
-          </Card.Title>
-        </Card.Header>
-        <Separator class="mt-1.5 bg-secondary mb-3 flex-shrink-0" />
-        <Card.Content class="space-y-1 text-xs overflow-y-auto">
-          <p>
-            <span class="font-semibold text-primary">Status:</span>
-            Finalizado
-          </p>
-          <p>
-            <span class="font-semibold text-primary">Páginas:</span>
-            {formatPagesText(finishedDocument.pages)}
-          </p>
-          <p>
-            <span class="font-semibold text-primary"
-              >Tempo de processamento:</span
-            >
-            {formatDurationText(
-              finishedDocument.startTime,
-              finishedDocument.endTime,
-            )}
-          </p>
-          <Collapsible.Root>
-            <div class="sticky top-0">
-              <Collapsible.Trigger>
-                <Button variant="secondary" size="icon" class="h-6 w-6 mt-1">
-                  <Ellipsis class="h-3 w-3" />
-                </Button>
-              </Collapsible.Trigger>
-            </div>
-            <Collapsible.Content class="mt-1.5 space-y-1">
-              <p>
-                <span class="font-semibold text-primary">ID:</span>
-                {finishedDocument.id}
-              </p>
-              <p>
-                <span class="font-semibold text-primary">Início:</span>
-                {new Date(finishedDocument.startTime).toLocaleString()}
-              </p>
-              <p>
-                <span class="font-semibold text-primary">Fim:</span>
-                {new Date(finishedDocument.endTime!).toLocaleString()}
-              </p>
-              <p class="font-semibold text-primary">info:</p>
-              <pre
-                class="text-wrap w-full max-w-full overflow-x-auto whitespace-pre-wrap break-words text-[10px]">
-                {JSON.stringify(finishedDocument.info, null, 2)}
+                {JSON.stringify(document.info, null, 2)}
               </pre>
             </Collapsible.Content>
           </Collapsible.Root>

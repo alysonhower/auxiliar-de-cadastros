@@ -1,8 +1,7 @@
 <script lang="ts">
-  // TODO: FIX PROCESSING PAGES WHEN ADD OTHER DOCUMENT
   import { extractPDFImages } from "$lib/llm";
   import * as pdfjs from "pdfjs-dist";
-  import { getContext, untrack } from "svelte";
+  import { getContext, tick, untrack } from "svelte";
   import { Button, buttonVariants } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
   import * as Dialog from "$lib/components/ui/dialog";
@@ -221,6 +220,7 @@
 
       if (canvasContext && statusCanvasContext) {
         applyStatusCanvasStyles(pageNumber, statusCanvasContext, width, height);
+        await tick();
 
         const renderContext = {
           canvasContext,
@@ -235,6 +235,7 @@
       setup.pageRendering = false;
 
       if (setup.pageNumPending !== undefined) {
+        await tick();
         loadPageQueue(setup.pageNumPending);
         setup.pageNumPending = undefined;
       }
@@ -413,10 +414,12 @@
       component.contains(target) || canvasContainer.contains(target);
   };
 
-  const handleDoubleClick = (e: MouseEvent) =>
-    setup.numPages &&
-    canvasContainer.contains(e.target as Node) &&
+  const handleDoubleClick = (e: MouseEvent) => {
+    if (!setup.numPages || !canvasContainer.contains(e.target as Node)) return;
+    const target = e.target as HTMLElement;
+    if (target.closest(".toggle-status-button")) return;
     handleSelectPage();
+  };
 
   const handleWheel = (e: WheelEvent) => {
     if (!setup.numPages) return;
@@ -703,7 +706,7 @@
   $effect(() => {
     if (!setup.path) return;
     loadDocument();
-    return cleanup;
+    return () => cleanup();
   });
 
   $effect(() => {
@@ -715,7 +718,15 @@
     documentContext.finishedDocuments.length;
     documentContext.currentPageNumber = validPageNumber;
     untrack(() => loadPageQueue(validPageNumber));
-    console.log("Loading page...");
+  });
+
+  $effect(() => {
+    validPageNumber;
+    return () => {
+      tick().then(() => {
+        setup.showStatusCanvas = true;
+      });
+    }
   });
 
   const toggleStatusCanvas = () => {
@@ -724,6 +735,18 @@
       loadPageQueue(validPageNumber);
     }
   };
+
+  let canvasWrapper: HTMLDivElement;
+
+  const isStatusToggleVisible = $derived(
+    setup.numPages &&
+      (documentContext.processedDocuments.some((pd) =>
+        pd.pages.includes(validPageNumber),
+      ) ||
+        documentContext.finishedDocuments.some((fd) =>
+          fd.pages.includes(validPageNumber),
+        )),
+  );
 </script>
 
 <svelte:window
@@ -753,17 +776,36 @@
         </p>
       </div>
     {/if}
-    <div bind:this={canvasContainer} class="relative">
-      <canvas
-        class={setup.numPages ? "" : "pointer-events-none"}
-        bind:this={renderCanvas}
-      ></canvas>
-      <svg class="absolute left-0 top-0" bind:this={textLayer}></svg>
-      <canvas
-        bind:this={statusCanvas}
-        class="pointer-events-none absolute left-0 top-0"
-        style="display: {setup.showStatusCanvas ? 'block' : 'none'};"
-      ></canvas>
+    <div bind:this={canvasWrapper} class="relative">
+      <div bind:this={canvasContainer} class="relative">
+        <canvas
+          class={setup.numPages ? "" : "pointer-events-none"}
+          bind:this={renderCanvas}
+        ></canvas>
+        <svg class="absolute left-0 top-0" bind:this={textLayer}></svg>
+        <canvas
+          bind:this={statusCanvas}
+          class="pointer-events-none absolute left-0 top-0"
+          style="display: {setup.showStatusCanvas ? 'block' : 'none'};"
+        ></canvas>
+      </div>
+      {#if isStatusToggleVisible}
+        <Button
+          tabindex={-1}
+          size="icon"
+          class="toggle-status-button absolute top-1/2 -right-12 -translate-y-1/2 transform"
+          onclick={toggleStatusCanvas}
+          aria-label={setup.showStatusCanvas
+            ? "Hide status overlay"
+            : "Show status overlay"}
+        >
+          {#if setup.showStatusCanvas}
+            <EyeOff />
+          {:else}
+            <Eye />
+          {/if}
+        </Button>
+      {/if}
     </div>
   </div>
 
@@ -818,21 +860,6 @@
       aria-label="Zoom out"
     >
       <ZoomOut />
-    </Button>
-    <Button
-      tabindex={-1}
-      size="icon"
-      onclick={toggleStatusCanvas}
-      disabled={!setup.numPages}
-      aria-label={setup.showStatusCanvas
-        ? "Hide status overlay"
-        : "Show status overlay"}
-    >
-      {#if setup.showStatusCanvas}
-        <EyeOff />
-      {:else}
-        <Eye />
-      {/if}
     </Button>
   </div>
 

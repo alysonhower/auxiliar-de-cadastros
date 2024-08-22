@@ -359,3 +359,39 @@ pub fn update_file_name(path: String, name: String) -> Result<DocumentInfo, Stri
     }
     Ok(document_info)
 }
+
+#[tauri::command]
+pub fn rename_finished_document(old_path: String, new_name: String) -> Result<DocumentInfo, String> {
+    println!("Renaming document. Old path: {}, New name: {}", old_path, new_name);
+
+    let json_path = Path::new(&old_path);
+    let parent_dir = json_path.parent().ok_or("Failed to get parent directory")?;
+    println!("Parent directory: {:?}", parent_dir);
+
+    // The done directory is actually inside the -data directory
+    let done_dir = parent_dir.join("done");
+    println!("Done directory: {:?}", done_dir);
+
+    let json_content = fs::read_to_string(json_path).map_err(|e| format!("Failed to read JSON: {}", e))?;
+    let mut doc_info: DocumentInfo = serde_json::from_str(&json_content).map_err(|e| format!("Failed to parse JSON: {}", e))?;
+
+    let current_pdf_path = done_dir.join(&doc_info.file_name).with_extension("pdf");
+    println!("Current PDF path: {:?}", current_pdf_path);
+
+    let new_pdf_name = format!("{}.pdf", new_name);
+    let new_pdf_path = done_dir.join(&new_pdf_name);
+    println!("New PDF path: {:?}", new_pdf_path);
+
+    if !current_pdf_path.exists() {
+        return Err(format!("Current PDF file does not exist: {:?}", current_pdf_path));
+    }
+
+    fs::rename(&current_pdf_path, &new_pdf_path).map_err(|e| format!("Failed to rename PDF: {}", e))?;
+
+    doc_info.file_name = new_name;
+
+    let updated_json = serde_json::to_string_pretty(&doc_info).map_err(|e| format!("Failed to serialize JSON: {}", e))?;
+    fs::write(json_path, updated_json).map_err(|e| format!("Failed to write updated JSON: {}", e))?;
+
+    Ok(doc_info)
+}

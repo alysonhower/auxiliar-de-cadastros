@@ -48,6 +48,9 @@ export interface ProcessedDocument extends ProcessingPage {
   info: DocumentInfo;
 }
 
+export interface FinishedDocument extends ProcessedDocument {
+}
+
 export interface SetupState {
   path: string | undefined;
   dataPath: string | undefined;
